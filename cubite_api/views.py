@@ -8,6 +8,7 @@ from opaque_keys.edx.keys import CourseKey
 from opaque_keys import InvalidKeyError
 from common.djangoapps.student.models import CourseEnrollment
 from openedx.core.djangoapps.enrollments import api as enrollment_api
+from django.contrib.auth.models import User
 import logging
 
 logger = logging.getLogger(__name__)
@@ -113,3 +114,18 @@ class Enrollments(APIView):
                 },
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+
+class GetUserId(APIView):
+    authentication_classes = (JwtAuthentication,)
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        # search for email in the parameters of the request
+        email = request.query_params.get('email')
+        if not email:
+            return Response({"message": "Email is required"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # get the user id from the email
+        user = User.objects.get(email=email)
+        return Response({"user_id": user.id}, status=status.HTTP_200_OK)
