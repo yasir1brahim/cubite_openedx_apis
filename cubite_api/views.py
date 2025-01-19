@@ -116,7 +116,7 @@ class Enrollments(APIView):
             )
 
 
-class GetUserId(APIView):
+class GetUserInfo(APIView):
     authentication_classes = (JwtAuthentication,)
     permission_classes = (IsAuthenticated,)
 
@@ -126,6 +126,6 @@ class GetUserId(APIView):
         if not email:
             return Response({"message": "Email is required"}, status=status.HTTP_400_BAD_REQUEST)
         
-        # get the user id from the email
+        # get the user info from the email
         user = User.objects.get(email=email)
-        return Response({"user_id": user.id}, status=status.HTTP_200_OK)
+        return Response({"user_id": user.id, "username": user.username}, status=status.HTTP_200_OK)
