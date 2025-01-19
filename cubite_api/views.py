@@ -8,6 +8,9 @@ from opaque_keys.edx.keys import CourseKey
 from opaque_keys import InvalidKeyError
 from common.djangoapps.student.models import CourseEnrollment
 from openedx.core.djangoapps.enrollments import api as enrollment_api
+import logging
+
+logger = logging.getLogger(__name__)
 
 class Enrollments(APIView):
     """
@@ -26,12 +29,25 @@ class Enrollments(APIView):
     permission_classes = (IsAuthenticated,)
 
     def post(self, request):
+        # Validate request data exists
+        if not request.data:
+            return Response(
+                {"message": "No data provided in request"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         email = request.data.get('email')
         course_id = request.data.get('course_id')
 
         if not email or not course_id:
             return Response(
-                {"message": "Both email and course_id are required."},
+                {
+                    "message": "Both email and course_id are required.",
+                    "received_data": {
+                        "email": email,
+                        "course_id": course_id
+                    }
+                },
                 status=status.HTTP_400_BAD_REQUEST
             )
 
