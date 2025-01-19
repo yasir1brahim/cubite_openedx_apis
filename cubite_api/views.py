@@ -1,7 +1,7 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from rest_framework_jwt.authentication import JSONWebTokenAuthentication
+from edx_rest_framework_extensions.auth.jwt.authentication import JwtAuthentication
 from rest_framework.permissions import IsAuthenticated
 from django.contrib.auth.models import User
 from opaque_keys.edx.keys import CourseKey
@@ -25,12 +25,21 @@ class Enrollments(APIView):
             "course_id": "course-v1:edX+DemoX+Demo_Course"
         }
     """
-    authentication_classes = (JSONWebTokenAuthentication,)
+    authentication_classes = (JwtAuthentication,)
     permission_classes = (IsAuthenticated,)
 
     def post(self, request):
+        # Verify the user has appropriate permissions
+        if not (request.user.is_staff or request.user.is_superuser):
+            logger.error("User %s does not have sufficient permissions", request.user)
+            return Response(
+                {"message": "Insufficient permissions"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         # Validate request data exists
         if not request.data:
+            logger.error("No data provided in request")
             return Response(
                 {"message": "No data provided in request"},
                 status=status.HTTP_400_BAD_REQUEST
@@ -40,6 +49,7 @@ class Enrollments(APIView):
         course_id = request.data.get('course_id')
 
         if not email or not course_id:
+            logger.error("Missing required fields: email=%s, course_id=%s", email, course_id)
             return Response(
                 {
                     "message": "Both email and course_id are required.",
@@ -55,6 +65,7 @@ class Enrollments(APIView):
             # Validate course key format
             course_key = CourseKey.from_string(course_id)
         except InvalidKeyError:
+            logger.error("Invalid course ID format: %s", course_id)
             return Response(
                 {"message": f"Invalid course ID format: {course_id}"},
                 status=status.HTTP_400_BAD_REQUEST
@@ -64,6 +75,7 @@ class Enrollments(APIView):
             # Get user by email
             user = User.objects.get(email=email)
         except User.DoesNotExist:
+            logger.error("User with email %s does not exist", email)
             return Response(
                 {"message": f"User with email {email} does not exist"},
                 status=status.HTTP_404_NOT_FOUND
@@ -72,6 +84,7 @@ class Enrollments(APIView):
         try:
             # Check if user is already enrolled
             if CourseEnrollment.is_enrolled(user, course_key):
+                logger.info("User %s is already enrolled in course %s", email, course_id)
                 return Response(
                     {"message": f"User {email} is already enrolled in course {course_id}"},
                     status=status.HTTP_200_OK
@@ -85,12 +98,15 @@ class Enrollments(APIView):
                 is_active=True
             )
             
+            logger.info("Successfully enrolled user %s in course %s", email, course_id)
             return Response({
                 "message": "Enrollment successful",
                 "enrollment": enrollment
             }, status=status.HTTP_200_OK)
 
         except Exception as e:
+            logger.error("Enrollment error for user %s in course %s: %s", 
+                        email, course_id, str(e))
             return Response(
                 {
                     "message": "An error occurred during enrollment",
