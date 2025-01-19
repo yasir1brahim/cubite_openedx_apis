@@ -94,7 +94,6 @@ class Enrollments(APIView):
             enrollment = enrollment_api.add_enrollment(
                 user.username,
                 course_id,
-                mode='audit',
                 is_active=True
             )
             
