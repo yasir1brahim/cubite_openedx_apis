@@ -199,7 +199,7 @@ class GetUserInfo(APIView):
             return Response({"message": "User does not exist"}, status=status.HTTP_404_NOT_FOUND)
         
 
-class GetCourseOutline(APIView):
+class GetCourseOutline(RetrieveAPIView):
     """
     **Use Cases**
 
