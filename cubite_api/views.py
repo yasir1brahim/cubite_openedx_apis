@@ -80,6 +80,7 @@ from xmodule.course_block import COURSE_VISIBILITY_PUBLIC, COURSE_VISIBILITY_PUB
 
 from openedx.core.djangoapps.user_authn.views.register import create_account_with_params
 from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
+from django.db import transaction
 
 
 logger = logging.getLogger(__name__)
@@ -450,6 +451,7 @@ class Accounts(APIView):
     )    
     permission_classes = (IsStaffOrOwner,)
 
+    @transaction.non_atomic_requests
     def post(self, request):
         """
         Creates a new user account
@@ -478,7 +480,7 @@ class Accounts(APIView):
         # so we can use the already defined methods for creating an user
         data['honor_code'] = "True"
         data['terms_of_service'] = "True"
-
+        data['password'] = password
         data['send_activation_email'] = False
 
         email = data.get('email')
@@ -493,7 +495,6 @@ class Accounts(APIView):
             user = create_account_with_params(request, data)
             # set the user as active
             user.is_active = True
-            user.set_password(password)
             user.save()
             user_id = user.id
         except ValidationError as err:
