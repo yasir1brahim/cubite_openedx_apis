@@ -12,7 +12,9 @@ from openedx.core.djangoapps.enrollments import api as enrollment_api
 from django.contrib.auth.models import User
 
 import logging
-
+import random
+import string
+import secrets
 
 # Outline View Imports
 from datetime import datetime, timezone
@@ -467,6 +469,10 @@ class Accounts(APIView):
         """
         data = request.data
 
+        # Generate a secure random password of 32 characters
+        alphabet = string.ascii_letters + string.digits  # a-z, A-Z, 0-9
+        password = ''.join(secrets.choice(alphabet) for _ in range(32))
+
         # set the honor_code and honor_code like checked,
         # so we can use the already defined methods for creating an user
         data['honor_code'] = "True"
@@ -486,6 +492,7 @@ class Accounts(APIView):
             user = create_account_with_params(request, data)
             # set the user as active
             user.is_active = True
+            user.set_password(password)
             user.save()
             user_id = user.id
         except Exception as err:
