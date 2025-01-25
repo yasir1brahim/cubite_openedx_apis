@@ -3,6 +3,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from edx_rest_framework_extensions.auth.jwt.authentication import JwtAuthentication
 from rest_framework.permissions import IsAuthenticated
+from openedx.core.lib.api.permissions import IsStaffOrOwner
 from django.contrib.auth.models import User
 from opaque_keys.edx.keys import CourseKey
 from opaque_keys import InvalidKeyError
@@ -75,6 +76,7 @@ from xblock.core import XBlock
 from xblock.completable import XBlockCompletionMode
 from xmodule.course_block import COURSE_VISIBILITY_PUBLIC, COURSE_VISIBILITY_PUBLIC_OUTLINE  # lint-amnesty, pylint: disable=wrong-import-order
 
+from openedx.core.djangoapps.user_authn.views.register import create_account_with_params
 
 
 logger = logging.getLogger(__name__)
@@ -435,3 +437,61 @@ class GetCourseOutline(APIView):
         response = super().finalize_response(request, response, *args, **kwargs)
         # Adding this header should be moved to global middleware, not just this endpoint
         return expose_header('Date', response)
+
+
+class Accounts(APIView):
+    authentication_classes = (
+        JwtAuthentication,
+        BearerAuthenticationAllowInactiveUser,
+        SessionAuthenticationAllowInactiveUser,
+    )    
+    permission_classes = (IsStaffOrOwner,)
+
+    def post(self, request):
+        """
+        Creates a new user account
+        URL: /cubite/api/v1/accounts
+        Arguments:
+            request (HttpRequest)
+            JSON (application/json)
+            {
+                "username": "staff4",
+                "email": "staff4@example.com",
+                "name": "stafftest"
+            }
+        Returns:
+            HttpResponse: 200 on success, {"user_id ": 9}
+            HttpResponse: 400 if the request is not valid.
+            HttpResponse: 409 if an account with the given username or email
+                address already exists
+        """
+        data = request.data
+
+        # set the honor_code and honor_code like checked,
+        # so we can use the already defined methods for creating an user
+        data['honor_code'] = "True"
+        data['terms_of_service'] = "True"
+
+        data['send_activation_email'] = False
+
+        email = data.get('email')
+        username = data.get('username')
+
+        # Handle duplicate email/username
+        if User.objects.filter(email=email).exists() or User.objects.filter(username=username).exists():
+            errors = {"user_message": "User already exists"}
+            return Response(errors, status=409)
+
+        try:
+            user = create_account_with_params(request, data)
+            # set the user as active
+            user.is_active = True
+            user.save()
+            user_id = user.id
+        except Exception as err:
+            # Only return first error for each field
+            errors = {"user_message": "Wrong parameters on user creation"}
+            return Response(errors, status=400)
+
+        response = Response({'user_id ': user_id}, status=200)
+        return response
