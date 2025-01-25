@@ -79,6 +79,7 @@ from xblock.completable import XBlockCompletionMode
 from xmodule.course_block import COURSE_VISIBILITY_PUBLIC, COURSE_VISIBILITY_PUBLIC_OUTLINE  # lint-amnesty, pylint: disable=wrong-import-order
 
 from openedx.core.djangoapps.user_authn.views.register import create_account_with_params
+from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 
 
 logger = logging.getLogger(__name__)
@@ -495,8 +496,9 @@ class Accounts(APIView):
             user.set_password(password)
             user.save()
             user_id = user.id
-        except Exception as err:
+        except ValidationError as err:
             # Only return first error for each field
+            assert NON_FIELD_ERRORS not in err.message_dict
             errors = {"user_message": "Wrong parameters on user creation"}
             return Response(errors, status=400)
 
