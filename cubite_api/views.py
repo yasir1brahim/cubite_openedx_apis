@@ -233,10 +233,7 @@ class GetCourseOutline(APIView):
         try:
             user = User.objects.get(email=email)
         except User.DoesNotExist:
-            return Response(
-                {"message": f"User with email {email} does not exist"},
-                status=status.HTTP_404_NOT_FOUND
-            )
+            user = request.user
         
         # Check staff permissions
         if not request.user.is_staff:
