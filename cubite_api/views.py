@@ -199,125 +199,51 @@ class GetUserInfo(APIView):
             return Response({"message": "User does not exist"}, status=status.HTTP_404_NOT_FOUND)
         
 
-class GetCourseOutline(RetrieveAPIView):
+class GetCourseOutline(APIView):
     """
-    **Use Cases**
-
-        Request details for the Outline Tab
-
-    **Example Requests**
-
-        GET api/cubite/v1/get_course_outline?course_id=course-v1:edX+DemoX+Demo_Course&email=student@example.com
-
-    **Response Values**
-
-        Body consists of two possible shapes.
-
-        For a good 200 response, the response will include:
-
-        access_expiration: An object detailing when access to this course will expire
-            expiration_date: (str) When the access expires, in ISO 8601 notation
-            masquerading_expired_course: (bool) Whether this course is expired for the masqueraded user
-            upgrade_deadline: (str) Last chance to upgrade, in ISO 8601 notation (or None if can't upgrade anymore)
-            upgrade_url: (str) Upgrade link (or None if can't upgrade anymore)
-        course_blocks:
-            blocks: List of serialized Course Block objects. Each serialization has the following fields:
-                id: (str) The usage ID of the block.
-                type: (str) The type of block. Possible values the names of any
-                    XBlock type in the system, including custom blocks. Examples are
-                    course, chapter, sequential, vertical, html, problem, video, and
-                    discussion.
-                display_name: (str) The display name of the block.
-                lms_web_url: (str) The URL to the navigational container of the
-                    xBlock on the web LMS.
-                children: (list) If the block has child blocks, a list of IDs of
-                    the child blocks.
-                resume_block: (bool) Whether the block is the resume block
-                has_scheduled_content: (bool) Whether the block has more content scheduled for the future
-        course_goals:
-            selected_goal:
-                days_per_week: (int) The number of days the learner wants to learn per week
-                subscribed_to_reminders: (bool) Whether the learner wants email reminders about their goal
-            weekly_learning_goal_enabled: Flag indicating if this feature is enabled for this call
-        course_tools: List of serialized Course Tool objects. Each serialization has the following fields:
-            analytics_id: (str) The unique id given to the tool.
-            title: (str) The display title of the tool.
-            url: (str) The link to access the tool.
-        dates_banner_info: (obj)
-            content_type_gating_enabled: (bool) Whether content type gating is enabled for this enrollment.
-            missed_deadlines: (bool) Whether the user has missed any graded content deadlines for the given course.
-            missed_gated_content: (bool) Whether the user has missed any gated content for the given course.
-            verified_upgrade_link: (str) The URL to ecommerce IDA for purchasing the verified upgrade.
-        dates_widget:
-            course_date_blocks: List of serialized Course Dates objects. Each serialization has the following fields:
-                complete: (bool) Meant to only be used by assignments. Indicates completeness for an
-                assignment.
-                date: (datetime) The date time corresponding for the event
-                date_type: (str) The type of date (ex. course-start-date, assignment-due-date, etc.)
-                description: (str) The description for the date event
-                learner_has_access: (bool) Indicates if the learner has access to the date event
-                link: (str) An absolute link to content related to the date event
-                    (ex. verified link or link to assignment)
-                title: (str) The title of the date event
-            dates_tab_link: (str) The URL to the Dates Tab
-            user_timezone: (str) The timezone of the given user
-        enroll_alert:
-            can_enroll: (bool) Whether the user can enroll in the given course
-            extra_text: (str)
-        enrollment_mode: (str) Current enrollment mode. Null if the user is not enrolled.
-        handouts_html: (str) Raw HTML for the handouts section of the course info
-        has_ended: (bool) Indicates whether course has ended
-        offer: An object detailing upgrade discount information
-            code: (str) Checkout code
-            expiration_date: (str) Expiration of offer, in ISO 8601 notation
-            original_price: (str) Full upgrade price without checkout code; includes currency symbol
-            discounted_price: (str) Upgrade price with checkout code; includes currency symbol
-            percentage: (int) Amount of discount
-            upgrade_url: (str) Checkout URL
-        resume_course:
-            has_visited_course: (bool) Whether the user has ever visited the course
-            url: (str) The display name of the course block to resume
-        welcome_message_html: (str) Raw HTML for the course updates banner
-        user_has_passing_grade: (bool) Whether the user currently is passing the course
-
-        If the learner does not have access to the course for a specific reason and should be redirected this
-        view will return a 403 and the following data:
-
-        url: (str) The URL to which the user should be redirected
-        error_code: (str) A system identifier for the reason the user is being redirected
-        developer_message: (str) A message explaining why the user is being redirected,
-                                 intended for developer debugging.
-        user_message: (str) A message explaining why the user is being redirected, intended to be shown to the user.
-
-    **Returns**
-
-        * 200 on success.
-        * 403 if the user does not currently have access to the course and should be redirected.
-        * 404 if the course is not available or cannot be seen.
-
+    API view to get course outline for a specific user.
+    Requires staff permissions and accepts course_id and email as query parameters.
     """
-
     authentication_classes = (
         JwtAuthentication,
         BearerAuthenticationAllowInactiveUser,
         SessionAuthenticationAllowInactiveUser,
     )
+    permission_classes = (IsAuthenticated,)
 
-    serializer_class = OutlineTabSerializer
-
-    def get(self, request, *args, **kwargs):  # pylint: disable=too-many-statements
+    def get(self, request, *args, **kwargs):
+        # Get and validate required parameters
         course_key_string = request.query_params.get('course_id')
         email = request.query_params.get('email')
-        course_key = CourseKey.from_string(course_key_string)
+
+        if not course_key_string or not email:
+            return Response(
+                {"message": "Both course_id and email are required parameters"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            course_key = CourseKey.from_string(course_key_string)
+        except InvalidKeyError:
+            return Response(
+                {"message": f"Invalid course ID format: {course_key_string}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         try:
             user = User.objects.get(email=email)
         except User.DoesNotExist:
-            return Response({"message": "User does not exist"}, status=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {"message": f"User with email {email} does not exist"},
+                status=status.HTTP_404_NOT_FOUND
+            )
         
-        # make sure requets.user is staff if not return 403
+        # Check staff permissions
         if not request.user.is_staff:
-            return Response({"message": "User does not have sufficient permissions"}, status=status.HTTP_403_FORBIDDEN)
+            return Response(
+                {"message": "User does not have sufficient permissions"},
+                status=status.HTTP_403_FORBIDDEN
+            )
 
         # Enable NR tracing for this view based on course
         monitoring_utils.set_custom_attribute('course_id', course_key_string)
@@ -378,6 +304,7 @@ class GetCourseOutline(RetrieveAPIView):
         is_staff = bool(has_access(user, 'staff', course_key))
         show_enrolled = is_enrolled or is_staff
         enable_proctored_exams = False
+
         if show_enrolled:
             course_blocks = get_course_outline_block_tree(request, course_key_string, user)
             date_blocks = get_course_date_blocks(course, user, request, num_assignments=1)
@@ -431,42 +358,25 @@ class GetCourseOutline(RetrieveAPIView):
                 enroll_alert['can_enroll'] = False
                 enroll_alert['extra_text'] = _('Course is full')
 
-        # Sometimes there are sequences returned by Course Blocks that we
-        # don't actually want to show to the user, such as when a sequence is
-        # composed entirely of units that the user can't access. The Learning
-        # Sequences API knows how to roll this up, so we use it determine which
-        # sequences we should remove from course_blocks.
-        #
-        # The long term goal is to remove the Course Blocks API call entirely,
-        # so this is a tiny first step in that migration.
         if course_blocks:
             user_course_outline = get_user_course_outline(
                 course_key, user, datetime.now(tz=timezone.utc)
             )
             available_seq_ids = {str(usage_key) for usage_key in user_course_outline.sequences}
-
             available_section_ids = {str(section.usage_key) for section in user_course_outline.sections}
 
-            # course_blocks is a reference to the root of the course,
-            # so we go through the chapters (sections) and keep only those
-            # which are part of the outline.
             course_blocks['children'] = [
                 chapter_data
                 for chapter_data in course_blocks.get('children', [])
                 if chapter_data['id'] in available_section_ids
             ]
 
-            # course_blocks is a reference to the root of the course, so we go
-            # through the chapters (sections) to look for sequences to remove.
             for chapter_data in course_blocks['children']:
                 chapter_data['children'] = [
                     seq_data
                     for seq_data in chapter_data['children']
                     if (
                         seq_data['id'] in available_seq_ids or
-                        # Edge case: Sometimes we have weird course structures.
-                        # We expect only sequentials here, but if there is
-                        # another type, just skip it (don't filter it out).
                         seq_data['type'] != 'sequential'
                     )
                 ] if 'children' in chapter_data else []
@@ -494,13 +404,24 @@ class GetCourseOutline(RetrieveAPIView):
             'user_has_passing_grade': user_has_passing_grade,
             'welcome_message_html': welcome_message_html,
         }
-        context = self.get_serializer_context()
-        context['course_overview'] = course_overview
-        context['enable_links'] = show_enrolled or allow_public
-        context['enrollment'] = enrollment
-        serializer = self.get_serializer_class()(data, context=context)
 
-        return Response(serializer.data)
+        try:
+            serializer = OutlineTabSerializer(
+                data,
+                context={
+                    'course_overview': course_overview,
+                    'enable_links': show_enrolled or allow_public,
+                    'enrollment': enrollment,
+                    'request': request,
+                }
+            )
+            return Response(serializer.data)
+        except Exception as e:
+            logger.error(f"Error serializing course outline data: {str(e)}")
+            return Response(
+                {"message": "Error processing course outline data"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
     def finalize_response(self, request, response, *args, **kwargs):
