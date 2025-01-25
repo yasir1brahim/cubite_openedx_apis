@@ -413,11 +413,12 @@ class GetCourseOutline(APIView):
                     'enable_links': show_enrolled or allow_public,
                     'enrollment': enrollment,
                     'request': request,
+                    'view': self
                 }
             )
             return Response(serializer.data)
         except Exception as e:
-            logger.error(f"Error serializing course outline data: {str(e)}")
+            logger.error(f"Error serializing course outline data: {str(e)}", exc_info=True)
             return Response(
                 {"message": "Error processing course outline data"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
