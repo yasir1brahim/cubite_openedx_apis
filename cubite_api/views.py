@@ -451,7 +451,6 @@ class Accounts(APIView):
     )    
     permission_classes = (IsStaffOrOwner,)
 
-    @transaction.non_atomic_requests
     def post(self, request):
         """
         Creates a new user account
@@ -492,16 +491,32 @@ class Accounts(APIView):
             return Response(errors, status=409)
 
         try:
-            user = create_account_with_params(request, data)
-            # set the user as active
-            user.is_active = True
-            user.save()
-            user_id = user.id
-        except ValidationError as err:
-            # Only return first error for each field
-            assert NON_FIELD_ERRORS not in err.message_dict
-            errors = {"user_message": "Wrong parameters on user creation"}
-            return Response(errors, status=400)
+            # Create user without transaction decorator
+            with transaction.atomic():
+                user = User.objects.create(
+                    username=username,
+                    email=email,
+                    is_active=True
+                )
+                user.set_password(password)
+                
+                # Set name if provided
+                if 'name' in data:
+                    user.first_name = data['name'].split(' ')[0]
+                    user.last_name = data['name'].split(' ')[1]
+                
+                user.save()
+                
+                # Create user profile
+                from common.djangoapps.student.models import UserProfile
+                profile = UserProfile(user=user)
+                profile.name = data.get('name', '')
+                profile.save()
 
-        response = Response({'user_id ': user_id}, status=200)
-        return response
+            user_id = user.id
+            return Response({'user_id': user_id}, status=200)
+
+        except Exception as err:
+            logger.error(f"Error creating user: {str(err)}", exc_info=True)
+            errors = {"user_message": "Error creating user account"}
+            return Response(errors, status=400)
