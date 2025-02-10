@@ -82,6 +82,9 @@ from openedx.core.djangoapps.user_authn.views.register import create_account_wit
 from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 from django.db import transaction
 
+# Add these imports at the top
+from xmodule.modulestore.django import modulestore
+from opaque_keys.edx.locator import BlockUsageLocator
 
 logger = logging.getLogger(__name__)
 
@@ -216,6 +219,82 @@ class GetCourseOutline(APIView):
         SessionAuthenticationAllowInactiveUser,
     )
     permission_classes = (IsAuthenticated,)
+
+    def get_block_completion(self, user, course_key, block_id):
+        """
+        Get completion status for a specific block
+        """
+        try:
+            completion = BlockCompletion.objects.get(
+                user=user,
+                context_key=course_key,  # Changed from course_key to context_key
+                block_key=block_id
+            )
+            return completion.completion
+        except BlockCompletion.DoesNotExist:
+            return 0.0
+
+    def get_unit_completion(self, user, course_key, unit):
+        """
+        Calculate unit completion based on its child blocks
+        """
+        try:
+            # Get all child blocks of the unit
+            child_blocks = unit.get_children()
+            if not child_blocks:
+                return 0.0, []
+
+            completable_blocks = []
+            for block in child_blocks:
+                # Only track completable blocks
+                if block.category in ['html', 'video', 'problem', 'drag-and-drop-v2']:
+                    completion = self.get_block_completion(user, course_key, block.location)
+                    completable_blocks.append({
+                        'display_name': block.display_name,
+                        'type': block.category,
+                        'id': str(block.location),
+                        'completion': completion
+                    })
+
+            # Calculate overall completion for the unit
+            total_blocks = len(completable_blocks)
+            if total_blocks > 0:
+                completed_blocks = sum(1 for block in completable_blocks if block['completion'] > 0)
+                unit_completion = completed_blocks / total_blocks
+            else:
+                unit_completion = 0.0
+
+            return unit_completion, completable_blocks
+
+        except Exception as e:
+            logger.error(f"Error calculating unit completion: {str(e)}")
+            return 0.0, []
+
+    def get_subsection_units(self, user, course_key, subsection_id):
+        """
+        Get all units within a subsection along with their completion status
+        """
+        store = modulestore()
+        units = []
+        
+        try:
+            subsection = store.get_item(subsection_id)
+            
+            for unit in subsection.get_children():
+                completion, child_blocks = self.get_unit_completion(user, course_key, unit)
+                unit_data = {
+                    'id': str(unit.location),
+                    'display_name': unit.display_name,
+                    'type': unit.category,
+                    'completion': completion,
+                    'child_blocks': child_blocks  # Include child blocks in response
+                }
+                units.append(unit_data)
+                
+        except Exception as e:
+            logger.error(f"Error getting units for subsection {subsection_id}: {str(e)}")
+            
+        return units
 
     def get(self, request, *args, **kwargs):
         # Get and validate required parameters
@@ -419,9 +498,25 @@ class GetCourseOutline(APIView):
                     'view': self
                 }
             )
-            return Response(serializer.data)
+            
+            # Get the serialized data
+            outline_data = serializer.data
+            
+            # Add units to each subsection in the course blocks
+            if 'course_blocks' in outline_data and 'blocks' in outline_data['course_blocks']:
+                blocks = outline_data['course_blocks']['blocks']
+                
+                for block_key, block_data in blocks.items():
+                    if block_data.get('type') == 'sequential':
+                        # This is a subsection
+                        block_id = BlockUsageLocator.from_string(block_key)
+                        units = self.get_subsection_units(user, course_key, block_id)
+                        block_data['units'] = units
+
+            return Response(outline_data)
+
         except Exception as e:
-            logger.error(f"Error serializing course outline data: {str(e)}", exc_info=True)
+            logger.error(f"Error processing course outline data: {str(e)}", exc_info=True)
             return Response(
                 {"message": "Error processing course outline data"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
