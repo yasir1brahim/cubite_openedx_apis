@@ -16,7 +16,7 @@ class CubiteAPIsConfig(AppConfig):
         PluginURLs.CONFIG: {
             ProjectType.LMS: {
                 PluginURLs.NAMESPACE: 'cubite_api',
-                PluginURLs.REGEX: r'^cubite/api/v1/',
+                PluginURLs.REGEX: r'^lms_custom/api/v1/',
                 PluginURLs.RELATIVE_PATH: 'urls',
             }
         },

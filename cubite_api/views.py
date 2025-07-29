@@ -5,7 +5,6 @@ from edx_rest_framework_extensions.auth.jwt.authentication import JwtAuthenticat
 from rest_framework.permissions import IsAuthenticated
 from openedx.core.lib.api.permissions import IsStaffOrOwner
 from django.contrib.auth.models import User
-from opaque_keys.edx.keys import CourseKey
 from opaque_keys import InvalidKeyError
 from common.djangoapps.student.models import CourseEnrollment
 from openedx.core.djangoapps.enrollments import api as enrollment_api
@@ -39,7 +38,6 @@ from rest_framework.permissions import IsAuthenticated  # lint-amnesty, pylint: 
 from rest_framework.response import Response  # lint-amnesty, pylint: disable=wrong-import-order
 
 from common.djangoapps.course_modes.models import CourseMode
-from common.djangoapps.student.models import CourseEnrollment
 from common.djangoapps.util.views import expose_header
 from lms.djangoapps.course_goals.api import (
     add_course_goal,
@@ -86,6 +84,18 @@ from django.db import transaction
 from xmodule.modulestore.django import modulestore
 from opaque_keys.edx.locator import BlockUsageLocator
 
+# New import statements
+from rest_framework.permissions import IsAuthenticated
+from common.djangoapps.student.api import is_user_enrolled_in_course
+from lms.djangoapps.courseware.courses import get_course_with_access
+from lms.djangoapps.instructor.views.tools import get_student_from_identifier
+from lms.djangoapps.instructor.access import ROLES, allow_access, revoke_access
+from django.utils.html import strip_tags
+from edx_rest_framework_extensions.auth.jwt.authentication import JwtAuthentication  # lint-amnesty, pylint: disable=wrong-import-order
+from openedx.core.lib.api.authentication import BearerAuthenticationAllowInactiveUser
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
+
 logger = logging.getLogger(__name__)
 
 class Enrollments(APIView):
@@ -95,7 +105,7 @@ class Enrollments(APIView):
         JWT authentication required.
 
     **Example Request**
-        POST /cubite/api/v1/enrollment
+        POST /lms_custom/api/v1/enrollment
         {
             "email": "student@example.com",
             "course_id": "course-v1:edX+DemoX+Demo_Course"
@@ -214,9 +224,9 @@ class GetCourseOutline(APIView):
     Requires staff permissions and accepts course_id and email as query parameters.
     """
     authentication_classes = (
+        SessionAuthenticationAllowInactiveUser,
         JwtAuthentication,
         BearerAuthenticationAllowInactiveUser,
-        SessionAuthenticationAllowInactiveUser,
     )
     permission_classes = (IsAuthenticated,)
 
@@ -319,13 +329,6 @@ class GetCourseOutline(APIView):
             user = User.objects.get(email=email)
         except User.DoesNotExist:
             user = request.user
-        
-        # Check staff permissions
-        if not request.user.is_staff:
-            return Response(
-                {"message": "User does not have sufficient permissions"},
-                status=status.HTTP_403_FORBIDDEN
-            )
 
         # Enable NR tracing for this view based on course
         monitoring_utils.set_custom_attribute('course_id', course_key_string)
@@ -546,10 +549,16 @@ class Accounts(APIView):
     )    
     permission_classes = (IsStaffOrOwner,)
 
+    def get(self, request):
+        """
+        GET /lms_custom/api/v1/accounts
+        """
+        return Response({'username': request.user.username, 'email': request.user.email})
+
     def post(self, request):
         """
         Creates a new user account
-        URL: /cubite/api/v1/accounts
+        URL: /lms_custom/api/v1/accounts
         Arguments:
             request (HttpRequest)
             JSON (application/json)
@@ -615,3 +624,145 @@ class Accounts(APIView):
             logger.error(f"Error creating user: {str(err)}", exc_info=True)
             errors = {"user_message": "Error creating user account"}
             return Response(errors, status=400)
+
+
+class ChangeUserPassword(APIView):
+    authentication_classes = (
+        JwtAuthentication,
+        BearerAuthenticationAllowInactiveUser,
+        SessionAuthenticationAllowInactiveUser,
+    )
+    permission_classes = (IsStaffOrOwner,)
+
+    def post(self, request):
+        """
+        Change user password
+        URL: /lms_custom/api/v1/change_user_password
+        Arguments:
+            request (HttpRequest)
+            JSON (application/json)
+            {
+                "username": "staff4",
+                "email": "staff4@example.com",
+                "password": "knysys@123"
+            }
+        Returns:
+            HttpResponse: 200 on success, {"user_id ": 9}
+            HttpResponse: 400 if the request is not valid.
+            HttpResponse: 403 if the request user is not is_staff and is_superuser.
+            HttpResponse: 404 if an account with the given username or email
+                not exists
+        """
+        data = request.data
+        email = data.get('email')
+        username = data.get('username')
+        password = data.get('password')
+        if not User.objects.filter(email=email, username=username).exists():
+            errors = {"user_message": "User not exists"}
+            return Response(errors, status=404)
+
+        if not (request.user.is_staff or request.user.is_superuser):
+            print("User %s does not have sufficient permissions", request.user)
+            return Response(
+                {"message": "Insufficient permissions"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        try:
+            # Change user password
+            user = User.objects.get(email=email, username=username)
+            user.set_password(password)
+            user.save()
+            user_id = user.id
+            return Response({'user_id': user_id}, status=200)
+
+        except Exception as err:
+            logger.error(f"Error changing password: {str(err)}", exc_info=True)
+            errors = {"user_message": "Error changing password"}
+            return Response(errors, status=400)
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class ModifyAccessAPIView(APIView):
+    authentication_classes = (
+        JwtAuthentication,
+        BearerAuthenticationAllowInactiveUser,
+    )
+    permission_classes = (IsAuthenticated,)
+
+    def post(self, request, course_id):
+        """
+        Modify staff/instructor access of other user.
+        Requires instructor access.
+        """
+        if not (request.user.is_staff or request.user.is_superuser):
+            print("User %s does not have sufficient permissions", request.user)
+            return Response(
+                {"message": "Insufficient permissions"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        course_id = CourseKey.from_string(course_id)
+        course = get_course_with_access(
+            request.user, 'instructor', course_id, depth=None
+        )
+
+        unique_student_identifier = request.data.get('unique_student_identifier')
+        rolename = request.data.get('rolename')
+        action = request.data.get('action')
+
+        try:
+            user = get_student_from_identifier(unique_student_identifier)
+        except User.DoesNotExist:
+            return Response(
+                {
+                    'unique_student_identifier': unique_student_identifier,
+                    'userDoesNotExist': True,
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if not user.is_active:
+            return Response(
+                {
+                    'unique_student_identifier': user.username,
+                    'inactiveUser': True,
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if rolename not in ROLES:
+            error = strip_tags(f"unknown rolename '{rolename}'")
+            return Response({'error': error}, status=status.HTTP_400_BAD_REQUEST)
+
+        if rolename == 'instructor' and user == request.user and action != 'allow':
+            return Response(
+                {
+                    'unique_student_identifier': user.username,
+                    'rolename': rolename,
+                    'action': action,
+                    'removingSelfAsInstructor': True,
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if action == 'allow':
+            allow_access(course, user, rolename)
+            if not is_user_enrolled_in_course(user, course_id):
+                CourseEnrollment.enroll(user, course_id)
+        elif action == 'revoke':
+            revoke_access(course, user, rolename)
+        else:
+            return Response(
+                {'error': strip_tags(f"unrecognized action '{action}'")},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        return Response(
+            {
+                'unique_student_identifier': user.username,
+                'rolename': rolename,
+                'action': action,
+                'success': 'yes',
+            },
+            status=status.HTTP_200_OK
+        )
