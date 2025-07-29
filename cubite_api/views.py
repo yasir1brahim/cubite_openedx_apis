@@ -6,7 +6,9 @@ from rest_framework.permissions import IsAuthenticated
 from openedx.core.lib.api.permissions import IsStaffOrOwner
 from django.contrib.auth.models import User
 from opaque_keys import InvalidKeyError
-from common.djangoapps.student.models import CourseEnrollment
+from common.djangoapps.student.models import CourseEnrollment, CourseAccessRole, UserProfile
+from social_django.models import UserSocialAuth
+from lms.djangoapps.courseware.models import StudentModule
 from openedx.core.djangoapps.enrollments import api as enrollment_api
 from django.contrib.auth.models import User
 
@@ -766,3 +768,131 @@ class ModifyAccessAPIView(APIView):
             },
             status=status.HTTP_200_OK
         )
+
+
+class DeleteEdxUser(APIView):
+    authentication_classes = (
+        JwtAuthentication,
+        BearerAuthenticationAllowInactiveUser,
+        SessionAuthenticationAllowInactiveUser,
+    )
+    permission_classes = (IsStaffOrOwner,)
+
+    def delete(self, request):
+        """
+        Change user password
+        URL: /lms_custom/api/v1/delete_edx_user
+        Arguments:
+            request (HttpRequest)
+            JSON (application/json)
+            {
+                "username": "staff4",
+                "email": "staff4@example.com",
+            }
+        Returns:
+            HttpResponse: 200 on success, {"user_id ": 9}
+            HttpResponse: 400 if the request is not valid.
+            HttpResponse: 403 if the request user is not is_staff and is_superuser.
+            HttpResponse: 404 if an account with the given username or email
+                not exists
+        """
+        data = request.data
+        email = data.get('email')
+        username = data.get('username')
+
+        if not User.objects.filter(email=email, username=username).exists():
+            errors = {"user_message": "User not exists"}
+            return Response(errors, status=404)
+
+        if not (request.user.is_staff or request.user.is_superuser):
+            print("User %s does not have sufficient permissions", request.user)
+            return Response(
+                {"message": "Insufficient permissions"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        try:
+            user = User.objects.get(email=email, username=username)
+
+            # Delete enrollments
+            CourseEnrollment.objects.filter(user=user).delete()
+
+            # Delete roles
+            CourseAccessRole.objects.filter(user=user).delete()
+
+            # Delete course progress data
+            StudentModule.objects.filter(student=user).delete()
+
+            # Delete social auth
+            UserSocialAuth.objects.filter(user=user).delete()
+
+            # Delete profile
+            UserProfile.objects.filter(user=user).delete()
+
+            # Finally delete user
+            user_id = user.id
+            user.delete()
+
+            return Response({"message": "User and related data deleted", "user_id": user_id}, status=200)
+        except Exception as err:
+            logger.error(f"Error changing password: {str(err)}", exc_info=True)
+            errors = {"user_message": "Error changing password"}
+            return Response(errors, status=400)
+
+
+class DeleteUserEnrollment(APIView):
+    authentication_classes = (
+        JwtAuthentication,
+        BearerAuthenticationAllowInactiveUser,
+        SessionAuthenticationAllowInactiveUser,
+    )
+    permission_classes = (IsStaffOrOwner,)
+
+    def delete(self, request):
+        """
+        Change user password
+        URL: /lms_custom/api/v1/delete_user_enrollment
+        Arguments:
+            request (HttpRequest)
+            JSON (application/json)
+            {
+                "username": "staff4",
+                "email": "staff4@example.com",
+                "course_id: "course-v1:test+CS100+2025",
+            }
+        Returns:
+            HttpResponse: 200 on success, {"user_id ": 9}
+            HttpResponse: 400 if the request is not valid.
+            HttpResponse: 403 if the request user is not is_staff and is_superuser.
+            HttpResponse: 404 if an account with the given username or email
+                and course does not exists
+        """
+        data = request.data
+        email = data.get('email')
+        username = data.get('username')
+        course_id = data.get('course_id')
+
+        if not User.objects.filter(email=email, username=username).exists():
+            errors = {"user_message": "User not exists"}
+            return Response(errors, status=404)
+
+        if not CourseEnrollment.objects.filter(course_id=course_id).exists():
+            errors = {"user_message": "User enrollment in this course does not exists"}
+            return Response(errors, status=404)
+
+        if not (request.user.is_staff or request.user.is_superuser):
+            print("User %s does not have sufficient permissions", request.user)
+            return Response(
+                {"message": "Insufficient permissions"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        try:
+            # Delete enrollments
+            CourseEnrollment.objects.filter(course_id=course_id).delete()
+
+            return Response({"message": "User enrollment delete", "course_id": course_id}, status=200)
+        except Exception as err:
+            logger.error(f"Error enrolling: {str(err)}", exc_info=True)
+            errors = {"user_message": "Error enrolling"}
+            return Response(errors, status=400)

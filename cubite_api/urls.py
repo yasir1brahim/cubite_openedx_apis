@@ -10,4 +10,6 @@ urlpatterns = [
     path('accounts', views.Accounts.as_view(), name='accounts'),
     path('change_user_password', views.ChangeUserPassword.as_view(), name='change_user_password'),
     path('modify-instructor-access/<str:course_id>/', views.ModifyAccessAPIView.as_view(), name='modify_instructor_access'),
+    path('delete-user-enrollment', views.DeleteUserEnrollment.as_view(), name='delete_user_enrollment'),
+    path('delete-edx-user', views.DeleteEdxUser.as_view(), name='delete_edx_user'),
 ]
