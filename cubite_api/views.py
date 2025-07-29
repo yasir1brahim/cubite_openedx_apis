@@ -711,9 +711,13 @@ class ModifyAccessAPIView(APIView):
         unique_student_identifier = request.data.get('unique_student_identifier')
         rolename = request.data.get('rolename')
         action = request.data.get('action')
+        is_course_creator = request.data.get('is_course_creator')
 
         try:
             user = get_student_from_identifier(unique_student_identifier)
+            if user and is_course_creator:
+                user.is_staff = True
+                user.save()
         except User.DoesNotExist:
             return Response(
                 {
@@ -896,3 +900,53 @@ class DeleteUserEnrollment(APIView):
             logger.error(f"Error enrolling: {str(err)}", exc_info=True)
             errors = {"user_message": "Error enrolling"}
             return Response(errors, status=400)
+
+
+class CourseCreatorAPIView(APIView):
+    authentication_classes = (
+        JwtAuthentication,
+        BearerAuthenticationAllowInactiveUser,
+    )
+    permission_classes = (IsAuthenticated,)
+
+    def post(self, request):
+        """
+        Modify staff/instructor access of other user.
+        Requires instructor access.
+        """
+        if not (request.user.is_staff or request.user.is_superuser):
+            print("User %s does not have sufficient permissions", request.user)
+            return Response(
+                {"message": "Insufficient permissions"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        username = request.data.get('username')
+        email = request.data.get('email')
+        is_course_creator = request.data.get('is_course_creator')
+
+        if username is None or email is None or is_course_creator is None:
+            return Response(
+                {"message": "username, email, and is_course_creator are required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            user =  User.objects.get(email=email, username=username)
+            user.is_staff = bool(is_course_creator)
+            user.save()
+            action = "added" if user.is_staff else "removed"
+        except User.DoesNotExist:
+            return Response(
+                {
+                    'username': username,
+                    'email': email,
+                    'userDoesNotExist': True,
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        return Response(
+                {"success": f"User course creator role {action} successfully"},
+                status=status.HTTP_200_OK
+            )
