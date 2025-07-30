@@ -98,6 +98,11 @@ from openedx.core.lib.api.authentication import BearerAuthenticationAllowInactiv
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
 
+from django.contrib.auth import logout
+from django.http import JsonResponse
+from django.http import HttpResponse
+from django.shortcuts import redirect
+
 logger = logging.getLogger(__name__)
 
 class Enrollments(APIView):
@@ -950,3 +955,41 @@ class CourseCreatorAPIView(APIView):
                 {"success": f"User course creator role {action} successfully"},
                 status=status.HTTP_200_OK
             )
+
+
+class LogoutUser(APIView):
+    def post(self, request):
+        """
+        Logout the user by clearing their session and cookies.
+        """
+        # Clear the session data
+        request.session.clear()
+
+        # Log the user out (this will also clear the sessionid cookie)
+        logout(request)
+
+        # Optionally delete cookies for sessionid and csrftoken
+        response = JsonResponse({'response': 'Logged out successfully'})
+
+        # Clear session-related cookies explicitly
+        response.delete_cookie('sessionid')
+        response.delete_cookie('csrftoken')
+        referer_url = request.META.get('HTTP_REFERER', '/')
+        return redirect(referer_url)
+
+    def get(self, request):
+        response = HttpResponse("Session cookie cleared.")
+        response.delete_cookie(
+            'sessionid',
+            domain='.nce.center'
+        )
+        request.session.clear()
+
+        # Optionally handle GET requests by returning a logout response
+        if request.user.is_authenticated:
+            logging.info(" In POST ")
+            return self.post(request)  # You can return the same response for GET requests
+        else:
+            logging.info(" In GET ")
+            redirect_url = request.META.get('HTTP_REFERER', '/')
+            return redirect(redirect_url)
