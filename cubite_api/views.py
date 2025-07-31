@@ -95,6 +95,7 @@ from lms.djangoapps.instructor.access import ROLES, allow_access, revoke_access
 from django.utils.html import strip_tags
 from edx_rest_framework_extensions.auth.jwt.authentication import JwtAuthentication  # lint-amnesty, pylint: disable=wrong-import-order
 from openedx.core.lib.api.authentication import BearerAuthenticationAllowInactiveUser
+from openedx.core.djangoapps.content.block_structure.api import get_block_structure_manager
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
 
@@ -102,6 +103,18 @@ from django.contrib.auth import logout
 from django.http import JsonResponse
 from django.http import HttpResponse
 from django.shortcuts import redirect
+
+from django.utils.http import urlencode
+import re
+import bleach
+import urllib.parse as parse
+from urllib.parse import parse_qs, urlsplit, urlunsplit
+
+from oauth2_provider.models import Application
+from openedx.core.djangoapps.safe_sessions.middleware import mark_user_change_as_expected
+from openedx.core.djangoapps.user_authn.cookies import delete_logged_in_cookies
+from openedx.core.djangoapps.user_authn.utils import is_safe_login_or_logout_redirect
+from common.djangoapps.third_party_auth import pipeline as tpa_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -957,64 +970,6 @@ class CourseCreatorAPIView(APIView):
             )
 
 
-class LogoutUser(APIView):
-    def post(self, request):
-        """
-        Logout the user by clearing their session and cookies.
-        """
-        # Clear the session data
-        request.session.clear()
-
-        # Log the user out (this will also clear the sessionid cookie)
-        logout(request)
-
-        # Optionally delete cookies for sessionid and csrftoken
-        response = JsonResponse({'response': 'Logged out successfully'})
-
-        # Clear session-related cookies explicitly
-        response.delete_cookie('sessionid')
-        response.delete_cookie('csrftoken')
-        referer_url = request.META.get('HTTP_REFERER', '/')
-        return redirect(referer_url)
-
-    def get(self, request):
-        response = HttpResponse("Session cookie cleared.")
-        response.delete_cookie(
-            'sessionid',
-            domain='.nce.center'
-        )
-        request.session.clear()
-
-        # Optionally handle GET requests by returning a logout response
-        if request.user.is_authenticated:
-            logging.info(" In POST ")
-            return self.post(request)  # You can return the same response for GET requests
-        else:
-            logging.info(" In GET ")
-            redirect_url = request.META.get('HTTP_REFERER', '/')
-            return redirect(redirect_url)
-
-
-from django.conf import settings
-from django.contrib.auth import logout
-from django.shortcuts import redirect
-from django.utils.http import urlencode
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
-
-import re
-import bleach
-import urllib.parse as parse
-from urllib.parse import parse_qs, urlsplit, urlunsplit
-
-from oauth2_provider.models import Application
-from openedx.core.djangoapps.safe_sessions.middleware import mark_user_change_as_expected
-from openedx.core.djangoapps.user_authn.cookies import delete_logged_in_cookies
-from openedx.core.djangoapps.user_authn.utils import is_safe_login_or_logout_redirect
-from common.djangoapps.third_party_auth import pipeline as tpa_pipeline
-
-
 class LogoutAPIView(APIView):
     """
     API version of LogoutView
@@ -1110,4 +1065,26 @@ class LogoutAPIView(APIView):
         }
 
         response.data = data
+        return response
+
+
+class ProgressCourseView(APIView):
+    authentication_classes = (
+        JwtAuthentication,
+        BearerAuthenticationAllowInactiveUser,
+    )
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        student = User.objects.get(email=request.user.email)
+        course_key_string = request.GET.get('course_key_string')
+        course_key = CourseKey.from_string(course_key_string)
+        is_staff = bool(has_access(request.user, 'staff', course_key))
+
+        collected_block_structure = get_block_structure_manager(course_key).get_collected()
+        course_grade = CourseGradeFactory().read(student, collected_block_structure=collected_block_structure)
+
+        course_grade.update(visible_grades_only=True, has_staff_access=is_staff)
+        grade_data = course_grade.summary
+        response = JsonResponse({'response': grade_data})
         return response
