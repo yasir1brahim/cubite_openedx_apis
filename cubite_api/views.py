@@ -1077,14 +1077,23 @@ class ProgressCourseView(APIView):
 
     def get(self, request):
         student = User.objects.get(email=request.user.email)
-        course_key_string = request.GET.get('course_key_string')
-        course_key = CourseKey.from_string(course_key_string)
-        is_staff = bool(has_access(request.user, 'staff', course_key))
+        enrollments = CourseEnrollment.objects.filter(user=student, is_active=True)
 
-        collected_block_structure = get_block_structure_manager(course_key).get_collected()
-        course_grade = CourseGradeFactory().read(student, collected_block_structure=collected_block_structure)
+        progress_data = []
 
-        course_grade.update(visible_grades_only=True, has_staff_access=is_staff)
-        grade_data = course_grade.summary
-        response = JsonResponse({'response': grade_data})
-        return response
+        for enrollment in enrollments:
+            course_key = enrollment.course_id
+            is_staff = bool(has_access(request.user, 'staff', course_key))
+
+            collected_block_structure = get_block_structure_manager(course_key).get_collected()
+            course_grade = CourseGradeFactory().read(student, collected_block_structure=collected_block_structure)
+
+            # Recalculate grades for visible content only
+            course_grade.update(visible_grades_only=True, has_staff_access=is_staff)
+
+            grade_data = course_grade.summary
+            grade_data["course_id"] = str(course_key)
+
+            progress_data.append(grade_data)
+
+        return JsonResponse({'response': progress_data})
