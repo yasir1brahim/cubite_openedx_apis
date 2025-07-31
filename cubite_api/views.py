@@ -115,6 +115,8 @@ from openedx.core.djangoapps.safe_sessions.middleware import mark_user_change_as
 from openedx.core.djangoapps.user_authn.cookies import delete_logged_in_cookies
 from openedx.core.djangoapps.user_authn.utils import is_safe_login_or_logout_redirect
 from common.djangoapps.third_party_auth import pipeline as tpa_pipeline
+from xmodule.modulestore.exceptions import ItemNotFoundError
+from openedx.core.djangoapps.content.block_structure.exceptions import BlockStructureNotFound
 
 logger = logging.getLogger(__name__)
 
@@ -1083,17 +1085,22 @@ class ProgressCourseView(APIView):
 
         for enrollment in enrollments:
             course_key = enrollment.course_id
-            is_staff = bool(has_access(request.user, 'staff', course_key))
+            try:
+                is_staff = bool(has_access(request.user, 'staff', course_key))
 
-            collected_block_structure = get_block_structure_manager(course_key).get_collected()
-            course_grade = CourseGradeFactory().read(student, collected_block_structure=collected_block_structure)
+                collected_block_structure = get_block_structure_manager(course_key).get_collected()
+                course_grade = CourseGradeFactory().read(student, collected_block_structure=collected_block_structure)
 
-            # Recalculate grades for visible content only
-            course_grade.update(visible_grades_only=True, has_staff_access=is_staff)
+                # Recalculate grades for visible content only
+                course_grade.update(visible_grades_only=True, has_staff_access=is_staff)
 
-            grade_data = course_grade.summary
-            grade_data["course_id"] = str(course_key)
+                grade_data = course_grade.summary
+                grade_data["course_id"] = str(course_key)
 
-            progress_data.append(grade_data)
+                progress_data.append(grade_data)
+
+            except (ItemNotFoundError, BlockStructureNotFound):
+                # Skip courses that are missing or have no block structure
+                continue
 
         return JsonResponse({'response': progress_data})
