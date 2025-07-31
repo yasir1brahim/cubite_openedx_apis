@@ -993,3 +993,121 @@ class LogoutUser(APIView):
             logging.info(" In GET ")
             redirect_url = request.META.get('HTTP_REFERER', '/')
             return redirect(redirect_url)
+
+
+from django.conf import settings
+from django.contrib.auth import logout
+from django.shortcuts import redirect
+from django.utils.http import urlencode
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+
+import re
+import bleach
+import urllib.parse as parse
+from urllib.parse import parse_qs, urlsplit, urlunsplit
+
+from oauth2_provider.models import Application
+from openedx.core.djangoapps.safe_sessions.middleware import mark_user_change_as_expected
+from openedx.core.djangoapps.user_authn.cookies import delete_logged_in_cookies
+from openedx.core.djangoapps.user_authn.utils import is_safe_login_or_logout_redirect
+from common.djangoapps.third_party_auth import pipeline as tpa_pipeline
+
+
+class LogoutAPIView(APIView):
+    """
+    API version of LogoutView
+    Logs out user and returns JSON with redirect info and logout URIs.
+    """
+    oauth_client_ids = []
+    default_target = '/'
+    tpa_logout_url = ''
+
+    def post(self, request, *args, **kwargs):
+        return self.get(request, *args, **kwargs)
+
+    @property
+    def target(self):
+        target_url = self.request.GET.get('redirect_url') or self.request.GET.get('next')
+
+        if target_url:
+            target_url = bleach.clean(parse.unquote(parse.quote_plus(target_url)))
+
+        use_target_url = target_url and is_safe_login_or_logout_redirect(
+            redirect_to=target_url,
+            request_host=self.request.get_host(),
+            dot_client_id=self.request.GET.get('client_id'),
+            require_https=self.request.is_secure(),
+        )
+        return target_url if use_target_url else self.default_target
+
+    def _build_logout_url(self, url):
+        scheme, netloc, path, query_string, fragment = urlsplit(url)
+        query_params = parse_qs(query_string)
+        query_params['no_redirect'] = 1
+        new_query_string = urlencode(query_params, doseq=True)
+        return urlunsplit((scheme, netloc, path, new_query_string, fragment))
+
+    def _is_enterprise_target(self, url):
+        unquoted_url = parse.unquote_plus(parse.quote(url))
+        return bool(re.match(r'^/enterprise(/handle_consent_enrollment)?/[a-z0-9\-]+/course', unquoted_url))
+
+    def _show_tpa_logout_link(self, target, referrer):
+        tpa_automatic_logout_enabled = getattr(settings, 'TPA_AUTOMATIC_LOGOUT_ENABLED', False)
+        if (
+            bool(target == self.default_target and self.tpa_logout_url) and
+            settings.LEARNER_PORTAL_URL_ROOT in referrer and
+            not tpa_automatic_logout_enabled
+        ):
+            return True
+        return False
+
+    def get(self, request, *args, **kwargs):
+        # Set up TPA logout URL
+        self.tpa_logout_url = tpa_pipeline.get_idp_logout_url_from_running_pipeline(request)
+
+        # Perform Django logout
+        logout(request)
+
+        response = Response(status=status.HTTP_200_OK)
+
+        # Clear cookies
+        delete_logged_in_cookies(response)
+        mark_user_change_as_expected(None)
+
+        # If automatic TPA logout is enabled, redirect immediately
+        if getattr(settings, 'TPA_AUTOMATIC_LOGOUT_ENABLED', False):
+            if self.tpa_logout_url:
+                return Response({
+                    "redirect": self.tpa_logout_url,
+                    "automatic_tpa_logout": True
+                }, status=status.HTTP_200_OK)
+
+        # Build logout URIs
+        uris = []
+        uris += Application.objects.filter(
+            client_id__in=self.oauth_client_ids,
+            redirect_uris__isnull=False
+        ).values_list('redirect_uris', flat=True)
+
+        uris += settings.IDA_LOGOUT_URI_LIST
+
+        referrer = request.META.get('HTTP_REFERER', '').strip('/')
+        logout_uris = []
+
+        for uri in uris:
+            if not referrer or (referrer and not uri.startswith(referrer)):
+                logout_uris.append(self._build_logout_url(uri))
+
+        target = self.target
+        data = {
+            'target': target,
+            'logout_uris': logout_uris,
+            'enterprise_target': self._is_enterprise_target(target),
+            'tpa_logout_url': self.tpa_logout_url,
+            'show_tpa_logout_link': self._show_tpa_logout_link(target, referrer),
+        }
+
+        response.data = data
+        return response

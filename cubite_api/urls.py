@@ -14,4 +14,5 @@ urlpatterns = [
     path('delete-edx-user', views.DeleteEdxUser.as_view(), name='delete_edx_user'),
     path('modify-creator-access', views.CourseCreatorAPIView.as_view(), name='modify_creator_access'),
     path('logout', views.LogoutUser.as_view(), name='logout_user'),
+    path('logout_api', views.LogoutAPIView.as_view(), name='logout_api'),
 ]
