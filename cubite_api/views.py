@@ -117,6 +117,7 @@ from openedx.core.djangoapps.user_authn.utils import is_safe_login_or_logout_red
 from common.djangoapps.third_party_auth import pipeline as tpa_pipeline
 from xmodule.modulestore.exceptions import ItemNotFoundError
 from openedx.core.djangoapps.content.block_structure.exceptions import BlockStructureNotFound
+from cms.djangoapps.course_creators.models import CourseCreator
 
 logger = logging.getLogger(__name__)
 
@@ -852,6 +853,9 @@ class DeleteEdxUser(APIView):
 
             # Delete profile
             UserProfile.objects.filter(user=user).delete()
+
+            # Delete course creator
+            CourseCreator.objects.filter(user=user).delete()
 
             # Finally delete user
             user_id = user.id
