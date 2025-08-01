@@ -117,6 +117,7 @@ from openedx.core.djangoapps.user_authn.utils import is_safe_login_or_logout_red
 from common.djangoapps.third_party_auth import pipeline as tpa_pipeline
 from xmodule.modulestore.exceptions import ItemNotFoundError
 from openedx.core.djangoapps.content.block_structure.exceptions import BlockStructureNotFound
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -854,8 +855,19 @@ class DeleteEdxUser(APIView):
             UserProfile.objects.filter(user=user).delete()
 
             # Delete course creator
-            from cms.djangoapps.course_creators.models import CourseCreator
-            CourseCreator.objects.filter(user=user).delete()
+            token = request.headers.get("Authorization")
+            cms_url = "https://studio.portal.nce.center/api/contentstore/v2/delete/course_creator"
+
+            try:
+                cms_response = requests.delete(
+                    cms_url,
+                    json={"email": email, "username": username},
+                    headers={"Authorization": token} if token else {},
+                    timeout=5
+                )
+            except requests.exceptions.Timeout:
+                cms_response = None
+                logger.warning("CMS API call timed out after 5 seconds")
 
             # Finally delete user
             user_id = user.id
