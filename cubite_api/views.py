@@ -371,6 +371,13 @@ class GetCourseOutline(APIView):
 
         course_overview = get_course_overview_or_404(course_key)
         enrollment = CourseEnrollment.get_enrollment(user, course_key)
+        print("Enrollment:", enrollment)
+        if not enrollment:
+            return Response(
+                {"message": f"User is not enrolled in: {course_key_string}"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
         enrollment_mode = getattr(enrollment, 'mode', None)
         allow_anonymous = COURSE_ENABLE_UNENROLLED_ACCESS_FLAG.is_enabled(course_key)
         allow_public = allow_anonymous and course.course_visibility == COURSE_VISIBILITY_PUBLIC
@@ -914,10 +921,12 @@ class DeleteUserEnrollment(APIView):
 
         if not User.objects.filter(email=email, username=username).exists():
             errors = {"user_message": "User not exists"}
+            print(errors, "errors")
             return Response(errors, status=404)
 
         if not CourseEnrollment.objects.filter(course_id=course_id).exists():
             errors = {"user_message": "User enrollment in this course does not exists"}
+            print(errors, "errors")
             return Response(errors, status=404)
 
         if not (request.user.is_staff or request.user.is_superuser):
