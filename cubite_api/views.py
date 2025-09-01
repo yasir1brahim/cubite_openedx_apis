@@ -253,6 +253,15 @@ class GetCourseOutline(APIView):
     )
     permission_classes = (IsAuthenticated,)
 
+    def get_block_visibility(self, block):
+        """
+        Get visibility data for a block
+        """
+        return {
+            'hide_from_toc': getattr(block, 'hide_from_toc', False),
+            'visible_to_staff_only': getattr(block, 'visible_to_staff_only', False)
+        }
+
     def get_block_completion(self, user, course_key, block_id):
         """
         Get completion status for a specific block
@@ -305,7 +314,7 @@ class GetCourseOutline(APIView):
 
     def get_subsection_units(self, user, course_key, subsection_id):
         """
-        Get all units within a subsection along with their completion status
+        Get all units within a subsection along with their completion status and visibility
         """
         store = modulestore()
         units = []
@@ -313,15 +322,24 @@ class GetCourseOutline(APIView):
         try:
             subsection = store.get_item(subsection_id)
             
+            # Get visibility for the subsection itself
+            subsection_visibility = self.get_block_visibility(subsection)
+
             for unit in subsection.get_children():
                 completion, child_blocks = self.get_unit_completion(user, course_key, unit)
+                unit_visibility = self.get_block_visibility(unit)
+
                 unit_data = {
                     'id': str(unit.location),
                     'display_name': unit.display_name,
                     'type': unit.category,
                     'completion': completion,
+                    'visibility': unit_visibility,
                     'child_blocks': child_blocks  # Include child blocks in response
                 }
+
+                # Add subsection visibility to each unit for easy access
+                unit_data['subsection_visibility'] = subsection_visibility
                 units.append(unit_data)
                 
         except Exception as e:
@@ -545,6 +563,18 @@ class GetCourseOutline(APIView):
                         block_id = BlockUsageLocator.from_string(block_key)
                         units = self.get_subsection_units(user, course_key, block_id)
                         block_data['units'] = units
+
+                        # Add visibility information for the subsection
+                        try:
+                            store = modulestore()
+                            subsection = store.get_item(block_id)
+                            block_data['visibility'] = self.get_block_visibility(subsection)
+                        except Exception as e:
+                            logger.warning(f"Could not load visibility for subsection {block_key}: {str(e)}")
+                            block_data['visibility'] = {
+                                'hide_from_toc': False,
+                                'visible_to_staff_only': False
+                            }
 
             return Response(outline_data)
 
