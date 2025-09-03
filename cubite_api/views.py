@@ -389,7 +389,6 @@ class GetCourseOutline(APIView):
 
         course_overview = get_course_overview_or_404(course_key)
         enrollment = CourseEnrollment.get_enrollment(user, course_key)
-        print("Enrollment:", enrollment)
         if not enrollment:
             return Response(
                 {"message": f"User is not enrolled in: {course_key_string}"},
@@ -577,6 +576,11 @@ class GetCourseOutline(APIView):
                                 'hide_from_toc': False,
                                 'visible_to_staff_only': False
                             }
+            # Ensure resume_block_id is None if not set
+            if resume_course['resume_block_id']:
+                outline_data['resume_course']['resume_block_id'] = resume_course['resume_block_id']
+            else:
+                outline_data['resume_course']['resume_block_id'] = None
 
             return Response(outline_data)
 
