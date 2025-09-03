@@ -429,6 +429,7 @@ class GetCourseOutline(APIView):
         offer_data = None
         resume_course = {
             'has_visited_course': False,
+            'resume_block_id': None,
             'url': None,
         }
         welcome_message_html = None
@@ -469,6 +470,7 @@ class GetCourseOutline(APIView):
                     'location': str(resume_block)
                 })
                 resume_course['url'] = request.build_absolute_uri(resume_path)
+                resume_course['resume_block_id'] = str(resume_block)
             except UnavailableCompletionData:
                 start_block = get_start_block(course_blocks)
                 resume_course['url'] = start_block['lms_web_url']
