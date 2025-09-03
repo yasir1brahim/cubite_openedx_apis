@@ -390,7 +390,6 @@ class GetCourseOutline(APIView):
 
         course_overview = get_course_overview_or_404(course_key)
         enrollment = CourseEnrollment.get_enrollment(user, course_key)
-        print("Enrollment:", enrollment)
         if not enrollment:
             return Response(
                 {"message": f"User is not enrolled in: {course_key_string}"},
@@ -430,6 +429,7 @@ class GetCourseOutline(APIView):
         offer_data = None
         resume_course = {
             'has_visited_course': False,
+            'resume_block_id': None,
             'url': None,
         }
         welcome_message_html = None
@@ -470,6 +470,7 @@ class GetCourseOutline(APIView):
                     'location': str(resume_block)
                 })
                 resume_course['url'] = request.build_absolute_uri(resume_path)
+                resume_course['resume_block_id'] = str(resume_block)
             except UnavailableCompletionData:
                 start_block = get_start_block(course_blocks)
                 resume_course['url'] = start_block['lms_web_url']
@@ -576,6 +577,11 @@ class GetCourseOutline(APIView):
                                 'hide_from_toc': False,
                                 'visible_to_staff_only': False
                             }
+            # Ensure resume_block_id is None if not set
+            if resume_course['resume_block_id']:
+                outline_data['resume_course']['resume_block_id'] = resume_course['resume_block_id']
+            else:
+                outline_data['resume_course']['resume_block_id'] = None
 
             return Response(outline_data)
 
