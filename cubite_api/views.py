@@ -60,7 +60,7 @@ from lms.djangoapps.courseware.toggles import courseware_disable_navigation_side
 from lms.djangoapps.courseware.views.views import get_cert_data
 from lms.djangoapps.grades.course_grade_factory import CourseGradeFactory
 from lms.djangoapps.utils import OptimizelyClient
-from openedx.core.djangoapps.content.learning_sequences.api import get_user_course_outline
+from openedx.core.djangoapps.content.learning_sequences.api import get_course_outline, get_user_course_outline
 from openedx.core.djangoapps.content.course_overviews.api import get_course_overview_or_404
 from openedx.core.djangoapps.course_groups.cohorts import get_cohort
 from openedx.core.lib.api.authentication import BearerAuthenticationAllowInactiveUser
@@ -98,6 +98,7 @@ from openedx.core.lib.api.authentication import BearerAuthenticationAllowInactiv
 from openedx.core.djangoapps.content.block_structure.api import get_block_structure_manager
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
+from rest_framework.permissions import AllowAny
 
 from django.contrib.auth import logout
 from django.http import JsonResponse
@@ -1181,6 +1182,94 @@ class LogoutAPIView(APIView):
 
         response.data = data
         return response
+
+
+class GetPublicCourseOutline(APIView):
+    """
+    API view to get course outline without requiring authentication.
+    Only returns course blocks without user-specific information.
+    Accepts course_id as a query parameter.
+    """
+    authentication_classes = ()
+    permission_classes = (AllowAny,)
+
+    def get(self, request, *args, **kwargs):
+        # Get and validate required parameters
+        course_key_string = request.query_params.get('course_id')
+
+        if not course_key_string:
+            return Response(
+                {"message": "course_id is a required parameter"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            course_key = CourseKey.from_string(course_key_string)
+        except InvalidKeyError:
+            return Response(
+                {"message": f"Invalid course ID format: {course_key_string}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            # Get the course outline without user context
+            course_outline = get_course_outline(course_key)
+
+            # Process the course outline data
+            course_blocks = self._process_course_outline(course_outline)
+            
+            return Response({
+                'course_blocks': course_blocks
+            })
+
+        except Exception as e:
+            logger.error(f"Error getting course outline: {str(e)}", exc_info=True)
+            return Response(
+                {"message": "Error retrieving course outline"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    def _process_course_outline(self, course_outline):
+        """
+        Convert course outline data to the expected format
+        """
+        result = {
+            'id': str(course_outline.course_key),
+            'display_name': course_outline.title,
+            'type': 'course',
+            'children': []
+        }
+
+        for section in course_outline.sections:
+            section_data = {
+                'id': str(section.usage_key),
+                'display_name': section.title,
+                'type': 'chapter',
+                'visibility': {
+                    'hide_from_toc': section.visibility.hide_from_toc,
+                    'visible_to_staff_only': section.visibility.visible_to_staff_only
+                },
+                'children': []
+            }
+
+            for sequence in section.sequences:
+                section_data['children'].append({
+                    'id': str(sequence.usage_key),
+                    'display_name': sequence.title,
+                    'type': 'sequential',
+                    'visibility': {
+                        'hide_from_toc': sequence.visibility.hide_from_toc,
+                        'visible_to_staff_only': sequence.visibility.visible_to_staff_only
+                    },
+                    'units': []  # Units would need to be fetched separately if needed
+                })
+
+            result['children'].append(section_data)
+
+        return {
+            'blocks': result,
+            'root': str(course_outline.course_key)
+        }
 
 
 class ProgressCourseView(APIView):

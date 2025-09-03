@@ -15,4 +15,5 @@ urlpatterns = [
     path('modify-creator-access', views.CourseCreatorAPIView.as_view(), name='modify_creator_access'),
     path('logout_api', views.LogoutAPIView.as_view(), name='logout_api'),
     path('progress', views.ProgressCourseView.as_view(), name='progress'),
+    path('get_public_course_outline', views.GetPublicCourseOutline.as_view(), name='get_public_course_outline'),
 ]
