@@ -118,6 +118,9 @@ from openedx.core.djangoapps.user_authn.utils import is_safe_login_or_logout_red
 from common.djangoapps.third_party_auth import pipeline as tpa_pipeline
 from xmodule.modulestore.exceptions import ItemNotFoundError
 from openedx.core.djangoapps.content.block_structure.exceptions import BlockStructureNotFound
+from opaque_keys.edx.keys import CourseKey
+from openedx.core.djangoapps.signals.signals import COURSE_GRADE_NOW_PASSED
+
 import requests
 
 logger = logging.getLogger(__name__)
@@ -1306,7 +1309,13 @@ class ProgressCourseView(APIView):
                 grade_data["course_id"] = str(course_key)
 
                 progress_data.append(grade_data)
-
+                if grade_data.get("grade") == "Pass":
+                    course_key = CourseKey.from_string(str(course_key))
+                    COURSE_GRADE_NOW_PASSED.send(
+                        sender=CourseGradeFactory,
+                        user=student,
+                        course_id=course_key,
+                    )
             except (ItemNotFoundError, BlockStructureNotFound):
                 # Skip courses that are missing or have no block structure
                 continue
