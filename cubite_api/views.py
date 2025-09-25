@@ -645,47 +645,29 @@ class Accounts(APIView):
         """
         data = request.data
 
-        # Generate a secure random password of 32 characters
-        alphabet = string.ascii_letters + string.digits  # a-z, A-Z, 0-9
-        password = ''.join(secrets.choice(alphabet) for _ in range(32))
-
         # set the honor_code and honor_code like checked,
         # so we can use the already defined methods for creating an user
         data['honor_code'] = "True"
         data['terms_of_service'] = "True"
-        data['password'] = password
         data['send_activation_email'] = False
 
         email = data.get('email')
         username = data.get('username')
 
-        # Handle duplicate email/username
-        if User.objects.filter(email=email).exists() or User.objects.filter(username=username).exists():
-            errors = {"user_message": "User already exists"}
-            return Response(errors, status=409)
-
         try:
-            # Create user without transaction decorator
-            with transaction.atomic():
-                user = User.objects.create(
-                    username=username,
-                    email=email,
-                    is_active=True
-                )
-                user.set_password(password)
-                
-                # Set name if provided
-                if 'name' in data:
-                    user.first_name = data['name'].split(' ')[0]
-                    user.last_name = data['name'].split(' ')[1]
-                
-                user.save()
-                
-                # Create user profile
-                from common.djangoapps.student.models import UserProfile
-                profile = UserProfile(user=user)
-                profile.name = data.get('name', '')
-                profile.save()
+            user = User.objects.filter(username=username, email=email).first()
+            # Set name if provided
+            if 'name' in data:
+                user.first_name = data['name'].split(' ')[0]
+                user.last_name = data['name'].split(' ')[1]
+
+            user.save()
+
+            # Create user profile
+            from common.djangoapps.student.models import UserProfile
+            profile = UserProfile(user=user)
+            profile.name = data.get('name', '')
+            profile.save()
 
             user_id = user.id
             return Response({'user_id': user_id}, status=200)
