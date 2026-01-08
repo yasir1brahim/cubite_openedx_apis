@@ -50,6 +50,9 @@ from lms.djangoapps.course_home_api.outline.serializers import (
     CourseBlockSerializer,
     OutlineTabSerializer,
 )
+from lms.djangoapps.docuseal_certificates.serializers import (
+    OutlineTabSerializer as DocusealOutlineTabSerializer,
+)
 from lms.djangoapps.course_home_api.utils import get_course_or_403
 from lms.djangoapps.courseware.access import has_access
 from lms.djangoapps.courseware.context_processor import user_timezone_locale_prefs
@@ -411,31 +414,31 @@ class GetCourseOutline(APIView):
         dates_tab_link = get_learning_mfe_home_url(course_key=course.id, url_fragment='dates')
 
         # Set all of the defaults
-        access_expiration = None
-        cert_data = None
+        # access_expiration = None  # Not used currently
+        # cert_data = None  # Not used currently
         course_blocks = None
-        course_goals = {
-            'selected_goal': None,
-            'weekly_learning_goal_enabled': False,
-        }
-        course_tools = CourseToolsPluginManager.get_enabled_course_tools(request, course_key)
-        dates_widget = {
-            'course_date_blocks': [],
-            'dates_tab_link': dates_tab_link,
-            'user_timezone': user_timezone,
-        }
+        # course_goals = {
+        #     'selected_goal': None,
+        #     'weekly_learning_goal_enabled': False,
+        # }  # Not used currently
+        # course_tools = CourseToolsPluginManager.get_enabled_course_tools(request, course_key)
+        # dates_widget = {
+        #     'course_date_blocks': [],
+        #     'dates_tab_link': dates_tab_link,
+        #     'user_timezone': user_timezone,
+        # }  # Not used currently
         enroll_alert = {
             'can_enroll': True,
             'extra_text': None,
         }
-        handouts_html = None
-        offer_data = None
+        # handouts_html = None  # Not used currently
+        # offer_data = None # Not used currently
         resume_course = {
             'has_visited_course': False,
             'resume_block_id': None,
             'url': None,
         }
-        welcome_message_html = None
+        # welcome_message_html = None
 
         is_enrolled = enrollment and enrollment.is_active
         is_staff = bool(has_access(user, 'staff', course_key))
@@ -445,25 +448,25 @@ class GetCourseOutline(APIView):
         if show_enrolled:
             course_blocks = get_course_outline_block_tree(request, course_key_string, user)
             date_blocks = get_course_date_blocks(course, user, request, num_assignments=1)
-            dates_widget['course_date_blocks'] = [block for block in date_blocks if not isinstance(block, TodaysDate)]
+            # dates_widget['course_date_blocks'] = [block for block in date_blocks if not isinstance(block, TodaysDate)]
 
-            handouts_html = get_course_info_section(request, user, course, 'handouts')
-            welcome_message_html = get_current_update_for_user(request, course)
+            # handouts_html = get_course_info_section(request, user, course, 'handouts')
+            # welcome_message_html = get_current_update_for_user(request, course)
 
-            offer_data = generate_offer_data(user, course_overview)
-            access_expiration = get_access_expiration_data(user, course_overview)
-            cert_data = get_cert_data(user, course, enrollment.mode) if is_enrolled else None
+            # offer_data = generate_offer_data(user, course_overview)
+            # access_expiration = get_access_expiration_data(user, course_overview) # Not used currently
+            # cert_data = get_cert_data(user, course, enrollment.mode) if is_enrolled else None  # Not used currently
 
             enable_proctored_exams = course_overview.enable_proctored_exams
 
-            if (is_enrolled and ENABLE_COURSE_GOALS.is_enabled(course_key)):
-                course_goals['weekly_learning_goal_enabled'] = True
-                selected_goal = get_course_goal(user, course_key)
-                if selected_goal:
-                    course_goals['selected_goal'] = {
-                        'days_per_week': selected_goal.days_per_week,
-                        'subscribed_to_reminders': selected_goal.subscribed_to_reminders,
-                    }
+            # if (is_enrolled and ENABLE_COURSE_GOALS.is_enabled(course_key)):
+            #     course_goals['weekly_learning_goal_enabled'] = True
+            #     selected_goal = get_course_goal(user, course_key)
+            #     if selected_goal:
+            #         course_goals['selected_goal'] = {
+            #             'days_per_week': selected_goal.days_per_week,
+            #             'subscribed_to_reminders': selected_goal.subscribed_to_reminders,
+            #         }
 
             try:
                 resume_block = get_key_to_last_completed_block(user, course.id)
@@ -480,8 +483,8 @@ class GetCourseOutline(APIView):
 
         elif allow_public_outline or allow_public or user_is_masquerading:
             course_blocks = get_course_outline_block_tree(request, course_key_string, None)
-            if allow_public or user_is_masquerading:
-                handouts_html = get_course_info_section(request, user, course, 'handouts')
+            # if allow_public or user_is_masquerading:
+            #     handouts_html = get_course_info_section(request, user, course, 'handouts')
 
         if not is_enrolled:
             if CourseMode.is_masters_only(course_key):
@@ -519,32 +522,32 @@ class GetCourseOutline(APIView):
                     )
                 ] if 'children' in chapter_data else []
 
-        user_has_passing_grade = False
-        if not user.is_anonymous:
-            user_grade = CourseGradeFactory().read(user, course)
-            if user_grade:
-                user_has_passing_grade = user_grade.passed
+        # user_has_passing_grade = False # Not used currently
+        # if not user.is_anonymous:
+        #     user_grade = CourseGradeFactory().read(user, course)
+        #     if user_grade:
+        #         user_has_passing_grade = user_grade.passed
 
         data = {
-            'access_expiration': access_expiration,
-            'cert_data': cert_data,
+            # 'access_expiration': access_expiration, # Not used currently
+            # 'cert_data': cert_data, # Not used currently
             'course_blocks': course_blocks,
-            'course_goals': course_goals,
-            'course_tools': course_tools,
-            'dates_widget': dates_widget,
+            # 'course_goals': course_goals, # Not used currently
+            # 'course_tools': course_tools, # Not used currently
+            # 'dates_widget': dates_widget, # Not used currently
             'enable_proctored_exams': enable_proctored_exams,
             'enroll_alert': enroll_alert,
             'enrollment_mode': enrollment_mode,
-            'handouts_html': handouts_html,
+            # 'handouts_html': handouts_html, # Not used currently
             'has_ended': course.has_ended(),
-            'offer': offer_data,
+            # 'offer': offer_data,
             'resume_course': resume_course,
-            'user_has_passing_grade': user_has_passing_grade,
-            'welcome_message_html': welcome_message_html,
+            # 'user_has_passing_grade': user_has_passing_grade, # Not used currently
+            # 'welcome_message_html': welcome_message_html, # Not used currently
         }
 
         try:
-            serializer = OutlineTabSerializer(
+            serializer = DocusealOutlineTabSerializer(
                 data,
                 context={
                     'course_overview': course_overview,
@@ -658,14 +661,15 @@ class Accounts(APIView):
             user = User.objects.filter(username=username, email=email).first()
             # Set name if provided
             if 'name' in data:
-                user.first_name = data['name'].split(' ')[0]
-                user.last_name = data['name'].split(' ')[1]
+                parts = data["name"].split(" ", 1)
+                user.first_name = parts[0]
+                user.last_name = parts[1] if len(parts) > 1 else ""
 
             user.save()
 
             # Create user profile
             from common.djangoapps.student.models import UserProfile
-            profile = UserProfile(user=user)
+            profile = UserProfile.objects.get(user=user)
             profile.name = data.get('name', '')
             profile.save()
 
