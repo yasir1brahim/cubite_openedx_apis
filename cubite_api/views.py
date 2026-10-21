@@ -856,7 +856,7 @@ class DeleteEdxUser(APIView):
 
             # Delete course creator
             token = request.headers.get("Authorization")
-            cms_url = "https://studio.portal.nce.center/api/contentstore/v2/delete/course_creator"
+            cms_url = settings.CMS_ROOT_URL.rstrip('/') + '/api/contentstore/v2/delete/course_creator'
 
             try:
                 cms_response = requests.delete(
