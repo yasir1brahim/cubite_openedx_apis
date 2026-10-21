@@ -50,6 +50,9 @@ from lms.djangoapps.course_home_api.outline.serializers import (
     CourseBlockSerializer,
     OutlineTabSerializer,
 )
+from lms.djangoapps.docuseal_certificates.serializers import (
+    OutlineTabSerializer as DocusealOutlineTabSerializer,
+)
 from lms.djangoapps.course_home_api.utils import get_course_or_403
 from lms.djangoapps.courseware.access import has_access
 from lms.djangoapps.courseware.context_processor import user_timezone_locale_prefs
@@ -60,7 +63,7 @@ from lms.djangoapps.courseware.toggles import courseware_disable_navigation_side
 from lms.djangoapps.courseware.views.views import get_cert_data
 from lms.djangoapps.grades.course_grade_factory import CourseGradeFactory
 from lms.djangoapps.utils import OptimizelyClient
-from openedx.core.djangoapps.content.learning_sequences.api import get_user_course_outline
+from openedx.core.djangoapps.content.learning_sequences.api import get_course_outline, get_user_course_outline
 from openedx.core.djangoapps.content.course_overviews.api import get_course_overview_or_404
 from openedx.core.djangoapps.course_groups.cohorts import get_cohort
 from openedx.core.lib.api.authentication import BearerAuthenticationAllowInactiveUser
@@ -98,6 +101,7 @@ from openedx.core.lib.api.authentication import BearerAuthenticationAllowInactiv
 from openedx.core.djangoapps.content.block_structure.api import get_block_structure_manager
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
+from rest_framework.permissions import AllowAny
 
 from django.contrib.auth import logout
 from django.http import JsonResponse
@@ -117,6 +121,9 @@ from openedx.core.djangoapps.user_authn.utils import is_safe_login_or_logout_red
 from common.djangoapps.third_party_auth import pipeline as tpa_pipeline
 from xmodule.modulestore.exceptions import ItemNotFoundError
 from openedx.core.djangoapps.content.block_structure.exceptions import BlockStructureNotFound
+from opaque_keys.edx.keys import CourseKey
+from openedx.core.djangoapps.signals.signals import COURSE_GRADE_NOW_PASSED
+
 import requests
 
 logger = logging.getLogger(__name__)
@@ -205,7 +212,7 @@ class Enrollments(APIView):
                 course_id,
                 is_active=True
             )
-            
+
             logger.info("Successfully enrolled user %s in course %s", email, course_id)
             return Response({
                 "message": "Enrollment successful",
@@ -213,7 +220,7 @@ class Enrollments(APIView):
             }, status=status.HTTP_200_OK)
 
         except Exception as e:
-            logger.error("Enrollment error for user %s in course %s: %s", 
+            logger.error("Enrollment error for user %s in course %s: %s",
                         email, course_id, str(e))
             return Response(
                 {
@@ -239,7 +246,7 @@ class GetUserInfo(APIView):
             return Response({"user_id": user.id, "username": user.username}, status=status.HTTP_200_OK)
         except User.DoesNotExist:
             return Response({"message": "User does not exist"}, status=status.HTTP_404_NOT_FOUND)
-        
+
 
 class GetCourseOutline(APIView):
     """
@@ -252,6 +259,15 @@ class GetCourseOutline(APIView):
         BearerAuthenticationAllowInactiveUser,
     )
     permission_classes = (IsAuthenticated,)
+
+    def get_block_visibility(self, block):
+        """
+        Get visibility data for a block
+        """
+        return {
+            'hide_from_toc': getattr(block, 'hide_from_toc', False),
+            'visible_to_staff_only': getattr(block, 'visible_to_staff_only', False)
+        }
 
     def get_block_completion(self, user, course_key, block_id):
         """
@@ -305,28 +321,37 @@ class GetCourseOutline(APIView):
 
     def get_subsection_units(self, user, course_key, subsection_id):
         """
-        Get all units within a subsection along with their completion status
+        Get all units within a subsection along with their completion status and visibility
         """
         store = modulestore()
         units = []
-        
+
         try:
             subsection = store.get_item(subsection_id)
-            
+
+            # Get visibility for the subsection itself
+            subsection_visibility = self.get_block_visibility(subsection)
+
             for unit in subsection.get_children():
                 completion, child_blocks = self.get_unit_completion(user, course_key, unit)
+                unit_visibility = self.get_block_visibility(unit)
+
                 unit_data = {
                     'id': str(unit.location),
                     'display_name': unit.display_name,
                     'type': unit.category,
                     'completion': completion,
+                    'visibility': unit_visibility,
                     'child_blocks': child_blocks  # Include child blocks in response
                 }
+
+                # Add subsection visibility to each unit for easy access
+                unit_data['subsection_visibility'] = subsection_visibility
                 units.append(unit_data)
-                
+
         except Exception as e:
             logger.error(f"Error getting units for subsection {subsection_id}: {str(e)}")
-            
+
         return units
 
     def get(self, request, *args, **kwargs):
@@ -371,6 +396,12 @@ class GetCourseOutline(APIView):
 
         course_overview = get_course_overview_or_404(course_key)
         enrollment = CourseEnrollment.get_enrollment(user, course_key)
+        if not enrollment:
+            return Response(
+                {"message": f"User is not enrolled in: {course_key_string}"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
         enrollment_mode = getattr(enrollment, 'mode', None)
         allow_anonymous = COURSE_ENABLE_UNENROLLED_ACCESS_FLAG.is_enabled(course_key)
         allow_public = allow_anonymous and course.course_visibility == COURSE_VISIBILITY_PUBLIC
@@ -383,30 +414,31 @@ class GetCourseOutline(APIView):
         dates_tab_link = get_learning_mfe_home_url(course_key=course.id, url_fragment='dates')
 
         # Set all of the defaults
-        access_expiration = None
-        cert_data = None
+        # access_expiration = None  # Not used currently
+        # cert_data = None  # Not used currently
         course_blocks = None
-        course_goals = {
-            'selected_goal': None,
-            'weekly_learning_goal_enabled': False,
-        }
-        course_tools = CourseToolsPluginManager.get_enabled_course_tools(request, course_key)
-        dates_widget = {
-            'course_date_blocks': [],
-            'dates_tab_link': dates_tab_link,
-            'user_timezone': user_timezone,
-        }
+        # course_goals = {
+        #     'selected_goal': None,
+        #     'weekly_learning_goal_enabled': False,
+        # }  # Not used currently
+        # course_tools = CourseToolsPluginManager.get_enabled_course_tools(request, course_key)
+        # dates_widget = {
+        #     'course_date_blocks': [],
+        #     'dates_tab_link': dates_tab_link,
+        #     'user_timezone': user_timezone,
+        # }  # Not used currently
         enroll_alert = {
             'can_enroll': True,
             'extra_text': None,
         }
-        handouts_html = None
-        offer_data = None
+        # handouts_html = None  # Not used currently
+        # offer_data = None # Not used currently
         resume_course = {
             'has_visited_course': False,
+            'resume_block_id': None,
             'url': None,
         }
-        welcome_message_html = None
+        # welcome_message_html = None
 
         is_enrolled = enrollment and enrollment.is_active
         is_staff = bool(has_access(user, 'staff', course_key))
@@ -416,25 +448,25 @@ class GetCourseOutline(APIView):
         if show_enrolled:
             course_blocks = get_course_outline_block_tree(request, course_key_string, user)
             date_blocks = get_course_date_blocks(course, user, request, num_assignments=1)
-            dates_widget['course_date_blocks'] = [block for block in date_blocks if not isinstance(block, TodaysDate)]
+            # dates_widget['course_date_blocks'] = [block for block in date_blocks if not isinstance(block, TodaysDate)]
 
-            handouts_html = get_course_info_section(request, user, course, 'handouts')
-            welcome_message_html = get_current_update_for_user(request, course)
+            # handouts_html = get_course_info_section(request, user, course, 'handouts')
+            # welcome_message_html = get_current_update_for_user(request, course)
 
-            offer_data = generate_offer_data(user, course_overview)
-            access_expiration = get_access_expiration_data(user, course_overview)
-            cert_data = get_cert_data(user, course, enrollment.mode) if is_enrolled else None
+            # offer_data = generate_offer_data(user, course_overview)
+            # access_expiration = get_access_expiration_data(user, course_overview) # Not used currently
+            # cert_data = get_cert_data(user, course, enrollment.mode) if is_enrolled else None  # Not used currently
 
             enable_proctored_exams = course_overview.enable_proctored_exams
 
-            if (is_enrolled and ENABLE_COURSE_GOALS.is_enabled(course_key)):
-                course_goals['weekly_learning_goal_enabled'] = True
-                selected_goal = get_course_goal(user, course_key)
-                if selected_goal:
-                    course_goals['selected_goal'] = {
-                        'days_per_week': selected_goal.days_per_week,
-                        'subscribed_to_reminders': selected_goal.subscribed_to_reminders,
-                    }
+            # if (is_enrolled and ENABLE_COURSE_GOALS.is_enabled(course_key)):
+            #     course_goals['weekly_learning_goal_enabled'] = True
+            #     selected_goal = get_course_goal(user, course_key)
+            #     if selected_goal:
+            #         course_goals['selected_goal'] = {
+            #             'days_per_week': selected_goal.days_per_week,
+            #             'subscribed_to_reminders': selected_goal.subscribed_to_reminders,
+            #         }
 
             try:
                 resume_block = get_key_to_last_completed_block(user, course.id)
@@ -444,14 +476,15 @@ class GetCourseOutline(APIView):
                     'location': str(resume_block)
                 })
                 resume_course['url'] = request.build_absolute_uri(resume_path)
+                resume_course['resume_block_id'] = str(resume_block)
             except UnavailableCompletionData:
                 start_block = get_start_block(course_blocks)
                 resume_course['url'] = start_block['lms_web_url']
 
         elif allow_public_outline or allow_public or user_is_masquerading:
             course_blocks = get_course_outline_block_tree(request, course_key_string, None)
-            if allow_public or user_is_masquerading:
-                handouts_html = get_course_info_section(request, user, course, 'handouts')
+            # if allow_public or user_is_masquerading:
+            #     handouts_html = get_course_info_section(request, user, course, 'handouts')
 
         if not is_enrolled:
             if CourseMode.is_masters_only(course_key):
@@ -489,32 +522,33 @@ class GetCourseOutline(APIView):
                     )
                 ] if 'children' in chapter_data else []
 
-        user_has_passing_grade = False
-        if not user.is_anonymous:
-            user_grade = CourseGradeFactory().read(user, course)
-            if user_grade:
-                user_has_passing_grade = user_grade.passed
-
+        # user_has_passing_grade = False # Not used currently
+        # if not user.is_anonymous:
+        #     user_grade = CourseGradeFactory().read(user, course)
+        #     if user_grade:
+        #         user_has_passing_grade = user_grade.passed
+        print(request.user.is_staff, "request.user.is_staff")
         data = {
-            'access_expiration': access_expiration,
-            'cert_data': cert_data,
+            # 'access_expiration': access_expiration, # Not used currently
+            # 'cert_data': cert_data, # Not used currently
             'course_blocks': course_blocks,
-            'course_goals': course_goals,
-            'course_tools': course_tools,
-            'dates_widget': dates_widget,
+            # 'course_goals': course_goals, # Not used currently
+            # 'course_tools': course_tools, # Not used currently
+            # 'dates_widget': dates_widget, # Not used currently
             'enable_proctored_exams': enable_proctored_exams,
             'enroll_alert': enroll_alert,
             'enrollment_mode': enrollment_mode,
-            'handouts_html': handouts_html,
+            # 'handouts_html': handouts_html, # Not used currently
             'has_ended': course.has_ended(),
-            'offer': offer_data,
+            'is_staff': is_staff,
+            # 'offer': offer_data,
             'resume_course': resume_course,
-            'user_has_passing_grade': user_has_passing_grade,
-            'welcome_message_html': welcome_message_html,
+            # 'user_has_passing_grade': user_has_passing_grade, # Not used currently
+            # 'welcome_message_html': welcome_message_html, # Not used currently
         }
 
         try:
-            serializer = OutlineTabSerializer(
+            serializer = DocusealOutlineTabSerializer(
                 data,
                 context={
                     'course_overview': course_overview,
@@ -524,20 +558,37 @@ class GetCourseOutline(APIView):
                     'view': self
                 }
             )
-            
+
             # Get the serialized data
             outline_data = serializer.data
-            
+
             # Add units to each subsection in the course blocks
             if 'course_blocks' in outline_data and 'blocks' in outline_data['course_blocks']:
                 blocks = outline_data['course_blocks']['blocks']
-                
+
                 for block_key, block_data in blocks.items():
                     if block_data.get('type') == 'sequential':
                         # This is a subsection
                         block_id = BlockUsageLocator.from_string(block_key)
                         units = self.get_subsection_units(user, course_key, block_id)
                         block_data['units'] = units
+
+                        # Add visibility information for the subsection
+                        try:
+                            store = modulestore()
+                            subsection = store.get_item(block_id)
+                            block_data['visibility'] = self.get_block_visibility(subsection)
+                        except Exception as e:
+                            logger.warning(f"Could not load visibility for subsection {block_key}: {str(e)}")
+                            block_data['visibility'] = {
+                                'hide_from_toc': False,
+                                'visible_to_staff_only': False
+                            }
+            # Ensure resume_block_id is None if not set
+            if resume_course['resume_block_id']:
+                outline_data['resume_course']['resume_block_id'] = resume_course['resume_block_id']
+            else:
+                outline_data['resume_course']['resume_block_id'] = None
 
             return Response(outline_data)
 
@@ -569,7 +620,7 @@ class Accounts(APIView):
         JwtAuthentication,
         BearerAuthenticationAllowInactiveUser,
         SessionAuthenticationAllowInactiveUser,
-    )    
+    )
     permission_classes = (IsStaffOrOwner,)
 
     def get(self, request):
@@ -598,47 +649,30 @@ class Accounts(APIView):
         """
         data = request.data
 
-        # Generate a secure random password of 32 characters
-        alphabet = string.ascii_letters + string.digits  # a-z, A-Z, 0-9
-        password = ''.join(secrets.choice(alphabet) for _ in range(32))
-
         # set the honor_code and honor_code like checked,
         # so we can use the already defined methods for creating an user
         data['honor_code'] = "True"
         data['terms_of_service'] = "True"
-        data['password'] = password
         data['send_activation_email'] = False
 
         email = data.get('email')
         username = data.get('username')
 
-        # Handle duplicate email/username
-        if User.objects.filter(email=email).exists() or User.objects.filter(username=username).exists():
-            errors = {"user_message": "User already exists"}
-            return Response(errors, status=409)
-
         try:
-            # Create user without transaction decorator
-            with transaction.atomic():
-                user = User.objects.create(
-                    username=username,
-                    email=email,
-                    is_active=True
-                )
-                user.set_password(password)
-                
-                # Set name if provided
-                if 'name' in data:
-                    user.first_name = data['name'].split(' ')[0]
-                    user.last_name = data['name'].split(' ')[1]
-                
-                user.save()
-                
-                # Create user profile
-                from common.djangoapps.student.models import UserProfile
-                profile = UserProfile(user=user)
-                profile.name = data.get('name', '')
-                profile.save()
+            user = User.objects.filter(username=username, email=email).first()
+            # Set name if provided
+            if 'name' in data:
+                parts = data["name"].split(" ", 1)
+                user.first_name = parts[0]
+                user.last_name = parts[1] if len(parts) > 1 else ""
+
+            user.save()
+
+            # Create user profile
+            from common.djangoapps.student.models import UserProfile
+            profile = UserProfile.objects.get(user=user)
+            profile.name = data.get('name', '')
+            profile.save()
 
             user_id = user.id
             return Response({'user_id': user_id}, status=200)
@@ -890,52 +924,112 @@ class DeleteUserEnrollment(APIView):
 
     def delete(self, request):
         """
-        Change user password
+        Delete a user's enrollment from a specific course.
+
         URL: /lms_custom/api/v1/delete_user_enrollment
+
         Arguments:
             request (HttpRequest)
-            JSON (application/json)
+            JSON (application/json):
             {
                 "username": "staff4",
                 "email": "staff4@example.com",
-                "course_id: "course-v1:test+CS100+2025",
+                "course_id": "course-v1:test+CS100+2025"
             }
+
         Returns:
-            HttpResponse: 200 on success, {"user_id ": 9}
-            HttpResponse: 400 if the request is not valid.
-            HttpResponse: 403 if the request user is not is_staff and is_superuser.
-            HttpResponse: 404 if an account with the given username or email
-                and course does not exists
+            HttpResponse: 200 on success with user_id and course_id
+            HttpResponse: 400 if the request is not valid
+            HttpResponse: 403 if the request user doesn't have permission
+            HttpResponse: 404 if user or enrollment is not found
         """
         data = request.data
         email = data.get('email')
         username = data.get('username')
         course_id = data.get('course_id')
 
-        if not User.objects.filter(email=email, username=username).exists():
-            errors = {"user_message": "User not exists"}
-            return Response(errors, status=404)
+        # Input validation
+        if not all([email, username, course_id]):
+            return Response(
+                {"message": "Missing required fields: email, username, or course_id"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-        if not CourseEnrollment.objects.filter(course_id=course_id).exists():
-            errors = {"user_message": "User enrollment in this course does not exists"}
-            return Response(errors, status=404)
-
+        # Permission check
         if not (request.user.is_staff or request.user.is_superuser):
-            print("User %s does not have sufficient permissions", request.user)
+            logger.warning(
+                "User %s attempted to delete enrollment without permission",
+                request.user.username
+            )
             return Response(
                 {"message": "Insufficient permissions"},
                 status=status.HTTP_403_FORBIDDEN
             )
 
         try:
-            # Delete enrollments
-            CourseEnrollment.objects.filter(course_id=course_id).delete()
+            # Get the user object
+            try:
+                user = User.objects.get(email=email, username=username)
+            except User.DoesNotExist:
+                logger.warning("User not found with email=%s, username=%s", email, username)
+                return Response(
+                    {"message": "User not found"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
 
-            return Response({"message": "User enrollment delete", "course_id": course_id}, status=200)
+            # Get and delete the specific enrollment
+            try:
+                enrollment = CourseEnrollment.objects.get(
+                    user=user,
+                    course_id=course_id
+                )
+
+                # Log before deletion
+                logger.info(
+                    "Deleting enrollment - User: %s (%s), Course: %s",
+                    user.username,
+                    user.email,
+                    course_id
+                )
+
+                # Perform the deletion
+                enrollment.delete()
+
+                logger.info(
+                    "Successfully deleted enrollment - User: %s, Course: %s",
+                    user.username,
+                    course_id
+                )
+
+                return Response({
+                    "message": "User enrollment deleted successfully",
+                    "user_id": user.id,
+                    "course_id": course_id
+                }, status=status.HTTP_200_OK)
+
+            except CourseEnrollment.DoesNotExist:
+                logger.warning(
+                    "Enrollment not found for user %s in course %s",
+                    user.username,
+                    course_id
+                )
+                return Response(
+                    {"message": "User is not enrolled in this course"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
         except Exception as err:
-            logger.error(f"Error enrolling: {str(err)}", exc_info=True)
-            errors = {"user_message": "Error enrolling"}
-            return Response(errors, status=400)
+            logger.error(
+                "Error deleting enrollment for user %s in course %s: %s",
+                username,
+                course_id,
+                str(err),
+                exc_info=True
+            )
+            return Response(
+                {"message": "An error occurred while processing your request"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 class CourseCreatorAPIView(APIView):
@@ -1086,6 +1180,94 @@ class LogoutAPIView(APIView):
         return response
 
 
+class GetPublicCourseOutline(APIView):
+    """
+    API view to get course outline without requiring authentication.
+    Only returns course blocks without user-specific information.
+    Accepts course_id as a query parameter.
+    """
+    authentication_classes = ()
+    permission_classes = (AllowAny,)
+
+    def get(self, request, *args, **kwargs):
+        # Get and validate required parameters
+        course_key_string = request.query_params.get('course_id')
+
+        if not course_key_string:
+            return Response(
+                {"message": "course_id is a required parameter"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            course_key = CourseKey.from_string(course_key_string)
+        except InvalidKeyError:
+            return Response(
+                {"message": f"Invalid course ID format: {course_key_string}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            # Get the course outline without user context
+            course_outline = get_course_outline(course_key)
+
+            # Process the course outline data
+            course_blocks = self._process_course_outline(course_outline)
+
+            return Response({
+                'course_blocks': course_blocks
+            })
+
+        except Exception as e:
+            logger.error(f"Error getting course outline: {str(e)}", exc_info=True)
+            return Response(
+                {"message": "Error retrieving course outline"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    def _process_course_outline(self, course_outline):
+        """
+        Convert course outline data to the expected format
+        """
+        result = {
+            'id': str(course_outline.course_key),
+            'display_name': course_outline.title,
+            'type': 'course',
+            'children': []
+        }
+
+        for section in course_outline.sections:
+            section_data = {
+                'id': str(section.usage_key),
+                'display_name': section.title,
+                'type': 'chapter',
+                'visibility': {
+                    'hide_from_toc': section.visibility.hide_from_toc,
+                    'visible_to_staff_only': section.visibility.visible_to_staff_only
+                },
+                'children': []
+            }
+
+            for sequence in section.sequences:
+                section_data['children'].append({
+                    'id': str(sequence.usage_key),
+                    'display_name': sequence.title,
+                    'type': 'sequential',
+                    'visibility': {
+                        'hide_from_toc': sequence.visibility.hide_from_toc,
+                        'visible_to_staff_only': sequence.visibility.visible_to_staff_only
+                    },
+                    'units': []  # Units would need to be fetched separately if needed
+                })
+
+            result['children'].append(section_data)
+
+        return {
+            'blocks': result,
+            'root': str(course_outline.course_key)
+        }
+
+
 class ProgressCourseView(APIView):
     authentication_classes = (
         JwtAuthentication,
@@ -1114,7 +1296,13 @@ class ProgressCourseView(APIView):
                 grade_data["course_id"] = str(course_key)
 
                 progress_data.append(grade_data)
-
+                if grade_data.get("grade") == "Pass":
+                    course_key = CourseKey.from_string(str(course_key))
+                    COURSE_GRADE_NOW_PASSED.send(
+                        sender=CourseGradeFactory,
+                        user=student,
+                        course_id=course_key,
+                    )
             except (ItemNotFoundError, BlockStructureNotFound):
                 # Skip courses that are missing or have no block structure
                 continue
