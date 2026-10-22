@@ -212,7 +212,7 @@ class Enrollments(APIView):
                 course_id,
                 is_active=True
             )
-            
+
             logger.info("Successfully enrolled user %s in course %s", email, course_id)
             return Response({
                 "message": "Enrollment successful",
@@ -220,7 +220,7 @@ class Enrollments(APIView):
             }, status=status.HTTP_200_OK)
 
         except Exception as e:
-            logger.error("Enrollment error for user %s in course %s: %s", 
+            logger.error("Enrollment error for user %s in course %s: %s",
                         email, course_id, str(e))
             return Response(
                 {
@@ -246,7 +246,7 @@ class GetUserInfo(APIView):
             return Response({"user_id": user.id, "username": user.username}, status=status.HTTP_200_OK)
         except User.DoesNotExist:
             return Response({"message": "User does not exist"}, status=status.HTTP_404_NOT_FOUND)
-        
+
 
 class GetCourseOutline(APIView):
     """
@@ -325,10 +325,10 @@ class GetCourseOutline(APIView):
         """
         store = modulestore()
         units = []
-        
+
         try:
             subsection = store.get_item(subsection_id)
-            
+
             # Get visibility for the subsection itself
             subsection_visibility = self.get_block_visibility(subsection)
 
@@ -348,10 +348,10 @@ class GetCourseOutline(APIView):
                 # Add subsection visibility to each unit for easy access
                 unit_data['subsection_visibility'] = subsection_visibility
                 units.append(unit_data)
-                
+
         except Exception as e:
             logger.error(f"Error getting units for subsection {subsection_id}: {str(e)}")
-            
+
         return units
 
     def get(self, request, *args, **kwargs):
@@ -527,7 +527,7 @@ class GetCourseOutline(APIView):
         #     user_grade = CourseGradeFactory().read(user, course)
         #     if user_grade:
         #         user_has_passing_grade = user_grade.passed
-
+        print(request.user.is_staff, "request.user.is_staff")
         data = {
             # 'access_expiration': access_expiration, # Not used currently
             # 'cert_data': cert_data, # Not used currently
@@ -540,6 +540,7 @@ class GetCourseOutline(APIView):
             'enrollment_mode': enrollment_mode,
             # 'handouts_html': handouts_html, # Not used currently
             'has_ended': course.has_ended(),
+            'is_staff': is_staff,
             # 'offer': offer_data,
             'resume_course': resume_course,
             # 'user_has_passing_grade': user_has_passing_grade, # Not used currently
@@ -557,14 +558,14 @@ class GetCourseOutline(APIView):
                     'view': self
                 }
             )
-            
+
             # Get the serialized data
             outline_data = serializer.data
-            
+
             # Add units to each subsection in the course blocks
             if 'course_blocks' in outline_data and 'blocks' in outline_data['course_blocks']:
                 blocks = outline_data['course_blocks']['blocks']
-                
+
                 for block_key, block_data in blocks.items():
                     if block_data.get('type') == 'sequential':
                         # This is a subsection
@@ -619,7 +620,7 @@ class Accounts(APIView):
         JwtAuthentication,
         BearerAuthenticationAllowInactiveUser,
         SessionAuthenticationAllowInactiveUser,
-    )    
+    )
     permission_classes = (IsStaffOrOwner,)
 
     def get(self, request):
@@ -889,7 +890,7 @@ class DeleteEdxUser(APIView):
 
             # Delete course creator
             token = request.headers.get("Authorization")
-            cms_url = "https://studio.portal.nce.center/api/contentstore/v2/delete/course_creator"
+            cms_url = settings.CMS_ROOT_URL.rstrip('/') + '/api/contentstore/v2/delete/course_creator'
 
             try:
                 cms_response = requests.delete(
@@ -924,9 +925,9 @@ class DeleteUserEnrollment(APIView):
     def delete(self, request):
         """
         Delete a user's enrollment from a specific course.
-        
+
         URL: /lms_custom/api/v1/delete_user_enrollment
-        
+
         Arguments:
             request (HttpRequest)
             JSON (application/json):
@@ -935,7 +936,7 @@ class DeleteUserEnrollment(APIView):
                 "email": "staff4@example.com",
                 "course_id": "course-v1:test+CS100+2025"
             }
-            
+
         Returns:
             HttpResponse: 200 on success with user_id and course_id
             HttpResponse: 400 if the request is not valid
@@ -982,7 +983,7 @@ class DeleteUserEnrollment(APIView):
                     user=user,
                     course_id=course_id
                 )
-                
+
                 # Log before deletion
                 logger.info(
                     "Deleting enrollment - User: %s (%s), Course: %s",
@@ -990,22 +991,22 @@ class DeleteUserEnrollment(APIView):
                     user.email,
                     course_id
                 )
-                
+
                 # Perform the deletion
                 enrollment.delete()
-                
+
                 logger.info(
                     "Successfully deleted enrollment - User: %s, Course: %s",
                     user.username,
                     course_id
                 )
-                
+
                 return Response({
                     "message": "User enrollment deleted successfully",
                     "user_id": user.id,
                     "course_id": course_id
                 }, status=status.HTTP_200_OK)
-                
+
             except CourseEnrollment.DoesNotExist:
                 logger.warning(
                     "Enrollment not found for user %s in course %s",
@@ -1016,7 +1017,7 @@ class DeleteUserEnrollment(APIView):
                     {"message": "User is not enrolled in this course"},
                     status=status.HTTP_404_NOT_FOUND
                 )
-                
+
         except Exception as err:
             logger.error(
                 "Error deleting enrollment for user %s in course %s: %s",
@@ -1212,7 +1213,7 @@ class GetPublicCourseOutline(APIView):
 
             # Process the course outline data
             course_blocks = self._process_course_outline(course_outline)
-            
+
             return Response({
                 'course_blocks': course_blocks
             })
