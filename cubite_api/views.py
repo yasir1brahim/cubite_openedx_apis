@@ -126,6 +126,8 @@ from openedx.core.djangoapps.signals.signals import COURSE_GRADE_NOW_PASSED
 
 import requests
 
+from .safe_errors import operation_failed
+
 logger = logging.getLogger(__name__)
 
 class Enrollments(APIView):
@@ -219,16 +221,8 @@ class Enrollments(APIView):
                 "enrollment": enrollment
             }, status=status.HTTP_200_OK)
 
-        except Exception as e:
-            logger.error("Enrollment error for user %s in course %s: %s",
-                        email, course_id, str(e))
-            return Response(
-                {
-                    "message": "An error occurred during enrollment",
-                    "details": str(e)
-                },
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        except Exception as exc:
+            return operation_failed("enroll_user", exc, "An error occurred during enrollment", field="message")
 
 
 class GetUserInfo(APIView):
@@ -316,7 +310,7 @@ class GetCourseOutline(APIView):
             return unit_completion, completable_blocks
 
         except Exception as e:
-            logger.error(f"Error calculating unit completion: {str(e)}")
+            logger.warning("Unit completion unavailable exception=%s", type(e).__name__)
             return 0.0, []
 
     def get_subsection_units(self, user, course_key, subsection_id):
@@ -350,7 +344,7 @@ class GetCourseOutline(APIView):
                 units.append(unit_data)
 
         except Exception as e:
-            logger.error(f"Error getting units for subsection {subsection_id}: {str(e)}")
+            logger.warning("Subsection units unavailable exception=%s", type(e).__name__)
 
         return units
 
@@ -579,7 +573,7 @@ class GetCourseOutline(APIView):
                             subsection = store.get_item(block_id)
                             block_data['visibility'] = self.get_block_visibility(subsection)
                         except Exception as e:
-                            logger.warning(f"Could not load visibility for subsection {block_key}: {str(e)}")
+                            logger.warning("Subsection visibility unavailable exception=%s", type(e).__name__)
                             block_data['visibility'] = {
                                 'hide_from_toc': False,
                                 'visible_to_staff_only': False
@@ -592,12 +586,8 @@ class GetCourseOutline(APIView):
 
             return Response(outline_data)
 
-        except Exception as e:
-            logger.error(f"Error processing course outline data: {str(e)}", exc_info=True)
-            return Response(
-                {"message": "Error processing course outline data"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+        except Exception as exc:
+            return operation_failed("learner_course_outline", exc, "Error processing course outline data", field="message")
 
 
     def finalize_response(self, request, response, *args, **kwargs):
@@ -677,10 +667,8 @@ class Accounts(APIView):
             user_id = user.id
             return Response({'user_id': user_id}, status=200)
 
-        except Exception as err:
-            logger.error(f"Error creating user: {str(err)}", exc_info=True)
-            errors = {"user_message": "Error creating user account"}
-            return Response(errors, status=400)
+        except Exception as exc:
+            return operation_failed("create_user", exc, "Error creating user account", field="user_message")
 
 
 class ChangeUserPassword(APIView):
@@ -733,10 +721,8 @@ class ChangeUserPassword(APIView):
             user_id = user.id
             return Response({'user_id': user_id}, status=200)
 
-        except Exception as err:
-            logger.error(f"Error changing password: {str(err)}", exc_info=True)
-            errors = {"user_message": "Error changing password"}
-            return Response(errors, status=400)
+        except Exception as exc:
+            return operation_failed("change_password", exc, "Error changing password", field="user_message")
 
 
 @method_decorator(csrf_exempt, name='dispatch')
@@ -908,10 +894,8 @@ class DeleteEdxUser(APIView):
             user.delete()
 
             return Response({"message": "User and related data deleted", "user_id": user_id}, status=200)
-        except Exception as err:
-            logger.error(f"Error changing password: {str(err)}", exc_info=True)
-            errors = {"user_message": "Error changing password"}
-            return Response(errors, status=400)
+        except Exception as exc:
+            return operation_failed("delete_user", exc, "Error deleting user", field="user_message")
 
 
 class DeleteUserEnrollment(APIView):
@@ -1018,18 +1002,8 @@ class DeleteUserEnrollment(APIView):
                     status=status.HTTP_404_NOT_FOUND
                 )
 
-        except Exception as err:
-            logger.error(
-                "Error deleting enrollment for user %s in course %s: %s",
-                username,
-                course_id,
-                str(err),
-                exc_info=True
-            )
-            return Response(
-                {"message": "An error occurred while processing your request"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+        except Exception as exc:
+            return operation_failed("delete_enrollment", exc, "An error occurred while processing your request", field="message")
 
 
 class CourseCreatorAPIView(APIView):
@@ -1218,12 +1192,8 @@ class GetPublicCourseOutline(APIView):
                 'course_blocks': course_blocks
             })
 
-        except Exception as e:
-            logger.error(f"Error getting course outline: {str(e)}", exc_info=True)
-            return Response(
-                {"message": "Error retrieving course outline"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+        except Exception as exc:
+            return operation_failed("public_course_outline", exc, "Error retrieving course outline", field="message")
 
     def _process_course_outline(self, course_outline):
         """

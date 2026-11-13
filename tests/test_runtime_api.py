@@ -20,8 +20,9 @@ COURSE = "course-v1:Test+Course+2026"
 
 
 class Response:
-    def __init__(self, data, status=200):
+    def __init__(self, data, status=200, headers=None):
         self.data, self.status_code = data, status
+        self.headers = headers or {}
 
 
 class Missing(Exception):
@@ -82,12 +83,79 @@ def view(name, **services):
                    status=NS(HTTP_400_BAD_REQUEST=400, HTTP_403_FORBIDDEN=403,
                              HTTP_404_NOT_FOUND=404, HTTP_500_INTERNAL_SERVER_ERROR=500,
                              HTTP_200_OK=200))
+    safe_source = SOURCE.with_name("safe_errors.py")
+    safe_tree = ast.parse(safe_source.read_text())
+    safe_tree.body = [
+        item for item in safe_tree.body
+        if not isinstance(item, ast.ImportFrom) or item.module != "rest_framework.response"
+    ]
+    exec(compile(safe_tree, str(safe_source), "exec"), context)
     context.update(services)
     exec(compile(ast.Module(body=[node], type_ignores=[]), str(SOURCE), "exec"), context)
     return context[name]()
 
 
 class RuntimeApiTests(unittest.TestCase):
+    def test_enrollment_failure_has_a_safe_response_and_matching_log(self):
+        private = "provider exception learner@example.test SECRET-TOKEN"
+        user = NS(username="learner", email="learner@example.test")
+
+        def fail(*args, **kwargs):
+            raise RuntimeError(private)
+
+        api = view("Enrollments",
+                   User=NS(objects=Manager([user]), DoesNotExist=Missing),
+                   CourseEnrollment=NS(is_enrolled=lambda *args: False),
+                   enrollment_api=NS(add_enrollment=fail))
+        request = NS(user=NS(is_staff=True, is_superuser=False), data={"email": user.email, "course_id": COURSE})
+        with self.assertLogs(level="ERROR") as logs:
+            response = api.post(request)
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.data["message"], "An error occurred during enrollment")
+        self.assertNotIn("details", response.data)
+        self.assertRegex(response.data["reference"], r"^NCEC-[2-9A-HJ-NP-Z]{10}$")
+        self.assertIn(response.data["reference"], logs.output[-1])
+        self.assertNotIn(user.email, str(logs.output))
+        self.assertNotIn("SECRET-TOKEN", str(logs.output))
+
+    def test_public_outline_operational_failure_has_a_safe_reference(self):
+        def fail(*args):
+            raise RuntimeError("provider secret")
+
+        api = view("GetPublicCourseOutline", get_course_outline=fail)
+        with self.assertLogs(level="ERROR") as logs:
+            response = api.get(NS(query_params={"course_id": COURSE}))
+        self.assertEqual(response.status_code, 500)
+        self.assertRegex(response.data["reference"], r"^NCEC-[2-9A-HJ-NP-Z]{10}$")
+        self.assertIn(response.data["reference"], logs.output[-1])
+        self.assertNotIn("provider secret", str(logs.output))
+
+    def test_account_password_and_delete_failures_have_matching_safe_references(self):
+        def fail(**kwargs):
+            raise RuntimeError("provider secret")
+
+        user = NS(username="learner", email="learner@example.test")
+        request = NS(user=NS(is_staff=True, is_superuser=False), data={
+            "username": user.username, "email": user.email, "password": "test-value",
+        })
+        cases = (
+            ("Accounts", NS(filter=fail)),
+            ("ChangeUserPassword", NS(filter=Manager([user]).filter, get=fail)),
+            ("DeleteEdxUser", NS(filter=Manager([user]).filter, get=fail)),
+            ("DeleteUserEnrollment", NS(filter=fail)),
+        )
+        for name, manager in cases:
+            with self.subTest(view=name), self.assertLogs(level="ERROR") as logs:
+                api = view(name, User=NS(objects=manager, DoesNotExist=Missing))
+                if name == "DeleteUserEnrollment":
+                    request.data["course_id"] = COURSE
+                method = api.delete if name.startswith("Delete") else api.post
+                response = method(request)
+                self.assertEqual(response.status_code, 500)
+                self.assertRegex(response.data["reference"], r"^NCEC-[2-9A-HJ-NP-Z]{10}$")
+                self.assertIn(response.data["reference"], logs.output[-1])
+                self.assertNotIn("provider secret", str(response.data) + str(logs.output))
+
     def test_public_outline_keeps_titles_and_visibility_in_learner_format(self):
         visibility = NS(hide_from_toc=False, visible_to_staff_only=True)
         outline = NS(course_key=COURSE, title="Safety", sections=[
