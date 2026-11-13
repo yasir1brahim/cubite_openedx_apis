@@ -1,4 +1,3 @@
-from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from edx_rest_framework_extensions.auth.jwt.authentication import JwtAuthentication
@@ -126,11 +125,11 @@ from openedx.core.djangoapps.signals.signals import COURSE_GRADE_NOW_PASSED
 
 import requests
 
-from .safe_errors import operation_failed
+from .safe_errors import CubiteAPIView, operation_failed
 
 logger = logging.getLogger(__name__)
 
-class Enrollments(APIView):
+class Enrollments(CubiteAPIView):
     """
     **Use Case**
         Enroll a student in a course using their email address.
@@ -225,7 +224,7 @@ class Enrollments(APIView):
             return operation_failed("enroll_user", exc, "An error occurred during enrollment", field="message")
 
 
-class GetUserInfo(APIView):
+class GetUserInfo(CubiteAPIView):
     authentication_classes = (JwtAuthentication,)
     permission_classes = (IsAuthenticated,)
 
@@ -242,7 +241,7 @@ class GetUserInfo(APIView):
             return Response({"message": "User does not exist"}, status=status.HTTP_404_NOT_FOUND)
 
 
-class GetCourseOutline(APIView):
+class GetCourseOutline(CubiteAPIView):
     """
     API view to get course outline for a specific user.
     Requires staff permissions and accepts course_id and email as query parameters.
@@ -605,7 +604,7 @@ class GetCourseOutline(APIView):
         return expose_header('Date', response)
 
 
-class Accounts(APIView):
+class Accounts(CubiteAPIView):
     authentication_classes = (
         JwtAuthentication,
         BearerAuthenticationAllowInactiveUser,
@@ -671,7 +670,7 @@ class Accounts(APIView):
             return operation_failed("create_user", exc, "Error creating user account", field="user_message")
 
 
-class ChangeUserPassword(APIView):
+class ChangeUserPassword(CubiteAPIView):
     authentication_classes = (
         JwtAuthentication,
         BearerAuthenticationAllowInactiveUser,
@@ -726,7 +725,7 @@ class ChangeUserPassword(APIView):
 
 
 @method_decorator(csrf_exempt, name='dispatch')
-class ModifyAccessAPIView(APIView):
+class ModifyAccessAPIView(CubiteAPIView):
     authentication_classes = (
         JwtAuthentication,
         BearerAuthenticationAllowInactiveUser,
@@ -815,7 +814,7 @@ class ModifyAccessAPIView(APIView):
         )
 
 
-class DeleteEdxUser(APIView):
+class DeleteEdxUser(CubiteAPIView):
     authentication_classes = (
         JwtAuthentication,
         BearerAuthenticationAllowInactiveUser,
@@ -898,7 +897,7 @@ class DeleteEdxUser(APIView):
             return operation_failed("delete_user", exc, "Error deleting user", field="user_message")
 
 
-class DeleteUserEnrollment(APIView):
+class DeleteUserEnrollment(CubiteAPIView):
     authentication_classes = (
         JwtAuthentication,
         BearerAuthenticationAllowInactiveUser,
@@ -1006,7 +1005,7 @@ class DeleteUserEnrollment(APIView):
             return operation_failed("delete_enrollment", exc, "An error occurred while processing your request", field="message")
 
 
-class CourseCreatorAPIView(APIView):
+class CourseCreatorAPIView(CubiteAPIView):
     authentication_classes = (
         JwtAuthentication,
         BearerAuthenticationAllowInactiveUser,
@@ -1056,7 +1055,7 @@ class CourseCreatorAPIView(APIView):
             )
 
 
-class LogoutAPIView(APIView):
+class LogoutAPIView(CubiteAPIView):
     """
     API version of LogoutView
     Logs out user and returns JSON with redirect info and logout URIs.
@@ -1154,7 +1153,7 @@ class LogoutAPIView(APIView):
         return response
 
 
-class GetPublicCourseOutline(APIView):
+class GetPublicCourseOutline(CubiteAPIView):
     """
     API view to get course outline without requiring authentication.
     Only returns course blocks without user-specific information.
@@ -1238,7 +1237,7 @@ class GetPublicCourseOutline(APIView):
         }
 
 
-class ProgressCourseView(APIView):
+class ProgressCourseView(CubiteAPIView):
     authentication_classes = (
         JwtAuthentication,
         BearerAuthenticationAllowInactiveUser,

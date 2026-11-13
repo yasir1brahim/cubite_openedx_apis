@@ -69,12 +69,30 @@ class Manager:
         return rows[0]
 
 
+class APIException(Exception):
+    status_code = 403
+
+
+class FakeAPIView:
+    def dispatch(self, request):
+        self.request = request
+        try:
+            return self.get(request)
+        except Exception as exc:
+            return self.handle_exception(exc)
+
+    def handle_exception(self, exc):
+        if isinstance(exc, APIException):
+            return Response({"detail": str(exc)}, status=exc.status_code)
+        raise exc
+
+
 def view(name, **services):
     tree = ast.parse(SOURCE.read_text())
     node = next((n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == name), None)
     if node is None:
         raise AssertionError(f"Required working API view is absent: {name}")
-    context = dict(APIView=object, Response=Response, JsonResponse=Response,
+    context = dict(APIView=FakeAPIView, Response=Response, APIException=APIException, Http404=Missing, PermissionDenied=Missing, set_rollback=lambda: None, JsonResponse=Response,
                    JwtAuthentication=object, BearerAuthenticationAllowInactiveUser=object,
                    SessionAuthenticationAllowInactiveUser=object, IsAuthenticated=object,
                    IsStaffOrOwner=object, AllowAny=object, InvalidKeyError=Missing,
@@ -87,7 +105,7 @@ def view(name, **services):
     safe_tree = ast.parse(safe_source.read_text())
     safe_tree.body = [
         item for item in safe_tree.body
-        if not isinstance(item, ast.ImportFrom) or item.module != "rest_framework.response"
+        if not isinstance(item, ast.ImportFrom)
     ]
     exec(compile(safe_tree, str(safe_source), "exec"), context)
     context.update(services)
@@ -96,6 +114,25 @@ def view(name, **services):
 
 
 class RuntimeApiTests(unittest.TestCase):
+    def test_dispatch_catches_early_outline_failure_and_preserves_expected_errors(self):
+        private = "private database error"
+        def fail(**kwargs):
+            raise RuntimeError(private)
+        api = view("GetCourseOutline", User=NS(objects=NS(get=fail), DoesNotExist=Missing))
+        request = NS(query_params={"course_id": COURSE, "email": "test@example.test"})
+        with self.assertLogs(level="ERROR") as logs:
+            response = api.dispatch(request)
+        self.assertEqual(response.status_code, 500)
+        self.assertRegex(response.data["reference"], r"^NCEC-[2-9A-HJ-NP-Z]{10}$")
+        self.assertIn(response.data["reference"], logs.output[0])
+        self.assertNotIn(private, str(logs.output) + str(response.data))
+        self.assertEqual(api.dispatch(NS(query_params={})).status_code, 400)
+
+        def deny(**kwargs):
+            raise APIException("Forbidden")
+        denied = view("GetCourseOutline", User=NS(objects=NS(get=deny), DoesNotExist=Missing))
+        self.assertEqual(denied.dispatch(request).status_code, 403)
+
     def test_enrollment_failure_has_a_safe_response_and_matching_log(self):
         private = "provider exception learner@example.test SECRET-TOKEN"
         user = NS(username="learner", email="learner@example.test")
