@@ -46,10 +46,6 @@ from lms.djangoapps.course_goals.api import (
     get_course_goal,
 )
 from lms.djangoapps.course_goals.models import CourseGoal
-from lms.djangoapps.course_home_api.outline.serializers import (
-    CourseBlockSerializer,
-    OutlineTabSerializer,
-)
 from lms.djangoapps.docuseal_certificates.serializers import (
     OutlineTabSerializer as DocusealOutlineTabSerializer,
 )
