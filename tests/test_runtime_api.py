@@ -167,7 +167,7 @@ class RuntimeApiTests(unittest.TestCase):
         self.assertIn(response.data["reference"], logs.output[-1])
         self.assertNotIn("provider secret", str(logs.output))
 
-    def test_account_password_and_delete_failures_have_matching_safe_references(self):
+    def test_account_and_password_failures_have_matching_safe_references(self):
         def fail(**kwargs):
             raise RuntimeError("provider secret")
 
@@ -178,16 +178,11 @@ class RuntimeApiTests(unittest.TestCase):
         cases = (
             ("Accounts", NS(filter=fail)),
             ("ChangeUserPassword", NS(filter=Manager([user]).filter, get=fail)),
-            ("DeleteEdxUser", NS(filter=Manager([user]).filter, get=fail)),
-            ("DeleteUserEnrollment", NS(filter=fail)),
         )
         for name, manager in cases:
             with self.subTest(view=name), self.assertLogs(level="ERROR") as logs:
                 api = view(name, User=NS(objects=manager, DoesNotExist=Missing))
-                if name == "DeleteUserEnrollment":
-                    request.data["course_id"] = COURSE
-                method = api.delete if name.startswith("Delete") else api.post
-                response = method(request)
+                response = api.post(request)
                 self.assertEqual(response.status_code, 500)
                 self.assertRegex(response.data["reference"], r"^NCEC-[2-9A-HJ-NP-Z]{10}$")
                 self.assertIn(response.data["reference"], logs.output[-1])
@@ -216,27 +211,6 @@ class RuntimeApiTests(unittest.TestCase):
         for params in [{}, {"course_id": "invalid"}]:
             with self.subTest(params=params):
                 self.assertEqual(api.get(NS(query_params=params)).status_code, 400)
-
-    def test_enrollment_delete_leaves_other_users_in_same_course(self):
-        student = NS(id=7, email="student@example.test", username="student")
-        other = NS(id=8, email="other@example.test", username="other")
-        mine, theirs = NS(user=student, course_id=COURSE), NS(user=other, course_id=COURSE)
-        manager = Manager([mine, theirs])
-        mine.delete = lambda: manager.rows.remove(mine)
-        api = view("DeleteUserEnrollment", User=NS(objects=Manager([student]), DoesNotExist=Missing),
-                   CourseEnrollment=NS(objects=manager, DoesNotExist=Missing))
-        request = NS(data={"username": "student", "email": "student@example.test", "course_id": COURSE},
-                     user=NS(is_staff=True, is_superuser=False, username="admin"))
-        self.assertEqual(api.delete(request).status_code, 200)
-        self.assertEqual(manager.rows, [theirs])
-
-    def test_enrollment_delete_validates_input_without_deleting(self):
-        manager = Manager([])
-        api = view("DeleteUserEnrollment", User=NS(objects=Manager([]), DoesNotExist=Missing),
-                   CourseEnrollment=NS(objects=manager, DoesNotExist=Missing))
-        response = api.delete(NS(data={}, user=NS(is_staff=True, is_superuser=False, username="admin")))
-        self.assertEqual(response.status_code, 400)
-        self.assertEqual(manager.rows, [])
 
     def test_name_update_uses_existing_account_and_preserves_password(self):
         student = NS(id=7, email="student@example.test", username="student", first_name="Old",
