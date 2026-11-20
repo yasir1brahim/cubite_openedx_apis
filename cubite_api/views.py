@@ -1,4 +1,3 @@
-from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from edx_rest_framework_extensions.auth.jwt.authentication import JwtAuthentication
@@ -6,9 +5,7 @@ from rest_framework.permissions import IsAuthenticated
 from openedx.core.lib.api.permissions import IsStaffOrOwner
 from django.contrib.auth.models import User
 from opaque_keys import InvalidKeyError
-from common.djangoapps.student.models import CourseEnrollment, CourseAccessRole, UserProfile
-from social_django.models import UserSocialAuth
-from lms.djangoapps.courseware.models import StudentModule
+from common.djangoapps.student.models import CourseEnrollment, UserProfile
 from openedx.core.djangoapps.enrollments import api as enrollment_api
 from django.contrib.auth.models import User
 
@@ -46,9 +43,6 @@ from lms.djangoapps.course_goals.api import (
     get_course_goal,
 )
 from lms.djangoapps.course_goals.models import CourseGoal
-from lms.djangoapps.docuseal_certificates.serializers import (
-    OutlineTabSerializer as DocusealOutlineTabSerializer,
-)
 from lms.djangoapps.course_home_api.utils import get_course_or_403
 from lms.djangoapps.courseware.access import has_access
 from lms.djangoapps.courseware.context_processor import user_timezone_locale_prefs
@@ -120,11 +114,13 @@ from openedx.core.djangoapps.content.block_structure.exceptions import BlockStru
 from opaque_keys.edx.keys import CourseKey
 from openedx.core.djangoapps.signals.signals import COURSE_GRADE_NOW_PASSED
 
-import requests
+
+from .safe_errors import CubiteAPIView, operation_failed
+from .serializers import CourseOutlineSerializer
 
 logger = logging.getLogger(__name__)
 
-class Enrollments(APIView):
+class Enrollments(CubiteAPIView):
     """
     **Use Case**
         Enroll a student in a course using their email address.
@@ -215,19 +211,11 @@ class Enrollments(APIView):
                 "enrollment": enrollment
             }, status=status.HTTP_200_OK)
 
-        except Exception as e:
-            logger.error("Enrollment error for user %s in course %s: %s",
-                        email, course_id, str(e))
-            return Response(
-                {
-                    "message": "An error occurred during enrollment",
-                    "details": str(e)
-                },
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        except Exception as exc:
+            return operation_failed("enroll_user", exc, "An error occurred during enrollment", field="message")
 
 
-class GetUserInfo(APIView):
+class GetUserInfo(CubiteAPIView):
     authentication_classes = (JwtAuthentication,)
     permission_classes = (IsAuthenticated,)
 
@@ -244,7 +232,7 @@ class GetUserInfo(APIView):
             return Response({"message": "User does not exist"}, status=status.HTTP_404_NOT_FOUND)
 
 
-class GetCourseOutline(APIView):
+class GetCourseOutline(CubiteAPIView):
     """
     API view to get course outline for a specific user.
     Requires staff permissions and accepts course_id and email as query parameters.
@@ -312,7 +300,7 @@ class GetCourseOutline(APIView):
             return unit_completion, completable_blocks
 
         except Exception as e:
-            logger.error(f"Error calculating unit completion: {str(e)}")
+            logger.warning("Unit completion unavailable exception=%s", type(e).__name__)
             return 0.0, []
 
     def get_subsection_units(self, user, course_key, subsection_id):
@@ -346,7 +334,7 @@ class GetCourseOutline(APIView):
                 units.append(unit_data)
 
         except Exception as e:
-            logger.error(f"Error getting units for subsection {subsection_id}: {str(e)}")
+            logger.warning("Subsection units unavailable exception=%s", type(e).__name__)
 
         return units
 
@@ -544,7 +532,7 @@ class GetCourseOutline(APIView):
         }
 
         try:
-            serializer = DocusealOutlineTabSerializer(
+            serializer = CourseOutlineSerializer(
                 data,
                 context={
                     'course_overview': course_overview,
@@ -575,7 +563,7 @@ class GetCourseOutline(APIView):
                             subsection = store.get_item(block_id)
                             block_data['visibility'] = self.get_block_visibility(subsection)
                         except Exception as e:
-                            logger.warning(f"Could not load visibility for subsection {block_key}: {str(e)}")
+                            logger.warning("Subsection visibility unavailable exception=%s", type(e).__name__)
                             block_data['visibility'] = {
                                 'hide_from_toc': False,
                                 'visible_to_staff_only': False
@@ -588,12 +576,8 @@ class GetCourseOutline(APIView):
 
             return Response(outline_data)
 
-        except Exception as e:
-            logger.error(f"Error processing course outline data: {str(e)}", exc_info=True)
-            return Response(
-                {"message": "Error processing course outline data"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+        except Exception as exc:
+            return operation_failed("learner_course_outline", exc, "Error processing course outline data", field="message")
 
 
     def finalize_response(self, request, response, *args, **kwargs):
@@ -611,7 +595,7 @@ class GetCourseOutline(APIView):
         return expose_header('Date', response)
 
 
-class Accounts(APIView):
+class Accounts(CubiteAPIView):
     authentication_classes = (
         JwtAuthentication,
         BearerAuthenticationAllowInactiveUser,
@@ -673,13 +657,11 @@ class Accounts(APIView):
             user_id = user.id
             return Response({'user_id': user_id}, status=200)
 
-        except Exception as err:
-            logger.error(f"Error creating user: {str(err)}", exc_info=True)
-            errors = {"user_message": "Error creating user account"}
-            return Response(errors, status=400)
+        except Exception as exc:
+            return operation_failed("create_user", exc, "Error creating user account", field="user_message")
 
 
-class ChangeUserPassword(APIView):
+class ChangeUserPassword(CubiteAPIView):
     authentication_classes = (
         JwtAuthentication,
         BearerAuthenticationAllowInactiveUser,
@@ -729,14 +711,12 @@ class ChangeUserPassword(APIView):
             user_id = user.id
             return Response({'user_id': user_id}, status=200)
 
-        except Exception as err:
-            logger.error(f"Error changing password: {str(err)}", exc_info=True)
-            errors = {"user_message": "Error changing password"}
-            return Response(errors, status=400)
+        except Exception as exc:
+            return operation_failed("change_password", exc, "Error changing password", field="user_message")
 
 
 @method_decorator(csrf_exempt, name='dispatch')
-class ModifyAccessAPIView(APIView):
+class ModifyAccessAPIView(CubiteAPIView):
     authentication_classes = (
         JwtAuthentication,
         BearerAuthenticationAllowInactiveUser,
@@ -825,210 +805,7 @@ class ModifyAccessAPIView(APIView):
         )
 
 
-class DeleteEdxUser(APIView):
-    authentication_classes = (
-        JwtAuthentication,
-        BearerAuthenticationAllowInactiveUser,
-        SessionAuthenticationAllowInactiveUser,
-    )
-    permission_classes = (IsStaffOrOwner,)
-
-    def delete(self, request):
-        """
-        Change user password
-        URL: /lms_custom/api/v1/delete_edx_user
-        Arguments:
-            request (HttpRequest)
-            JSON (application/json)
-            {
-                "username": "staff4",
-                "email": "staff4@example.com",
-            }
-        Returns:
-            HttpResponse: 200 on success, {"user_id ": 9}
-            HttpResponse: 400 if the request is not valid.
-            HttpResponse: 403 if the request user is not is_staff and is_superuser.
-            HttpResponse: 404 if an account with the given username or email
-                not exists
-        """
-        data = request.data
-        email = data.get('email')
-        username = data.get('username')
-
-        if not User.objects.filter(email=email, username=username).exists():
-            errors = {"user_message": "User not exists"}
-            return Response(errors, status=404)
-
-        if not (request.user.is_staff or request.user.is_superuser):
-            print("User %s does not have sufficient permissions", request.user)
-            return Response(
-                {"message": "Insufficient permissions"},
-                status=status.HTTP_403_FORBIDDEN
-            )
-
-        try:
-            user = User.objects.get(email=email, username=username)
-
-            # Delete enrollments
-            CourseEnrollment.objects.filter(user=user).delete()
-
-            # Delete roles
-            CourseAccessRole.objects.filter(user=user).delete()
-
-            # Delete course progress data
-            StudentModule.objects.filter(student=user).delete()
-
-            # Delete social auth
-            UserSocialAuth.objects.filter(user=user).delete()
-
-            # Delete profile
-            UserProfile.objects.filter(user=user).delete()
-
-            # Delete course creator
-            token = request.headers.get("Authorization")
-            cms_url = settings.CMS_ROOT_URL.rstrip('/') + '/api/contentstore/v2/delete/course_creator'
-
-            try:
-                cms_response = requests.delete(
-                    cms_url,
-                    json={"email": email, "username": username},
-                    headers={"Authorization": token} if token else {},
-                    timeout=5
-                )
-            except requests.exceptions.Timeout:
-                cms_response = None
-                logger.warning("CMS API call timed out after 5 seconds")
-
-            # Finally delete user
-            user_id = user.id
-            user.delete()
-
-            return Response({"message": "User and related data deleted", "user_id": user_id}, status=200)
-        except Exception as err:
-            logger.error(f"Error changing password: {str(err)}", exc_info=True)
-            errors = {"user_message": "Error changing password"}
-            return Response(errors, status=400)
-
-
-class DeleteUserEnrollment(APIView):
-    authentication_classes = (
-        JwtAuthentication,
-        BearerAuthenticationAllowInactiveUser,
-        SessionAuthenticationAllowInactiveUser,
-    )
-    permission_classes = (IsStaffOrOwner,)
-
-    def delete(self, request):
-        """
-        Delete a user's enrollment from a specific course.
-
-        URL: /lms_custom/api/v1/delete_user_enrollment
-
-        Arguments:
-            request (HttpRequest)
-            JSON (application/json):
-            {
-                "username": "staff4",
-                "email": "staff4@example.com",
-                "course_id": "course-v1:test+CS100+2025"
-            }
-
-        Returns:
-            HttpResponse: 200 on success with user_id and course_id
-            HttpResponse: 400 if the request is not valid
-            HttpResponse: 403 if the request user doesn't have permission
-            HttpResponse: 404 if user or enrollment is not found
-        """
-        data = request.data
-        email = data.get('email')
-        username = data.get('username')
-        course_id = data.get('course_id')
-
-        # Input validation
-        if not all([email, username, course_id]):
-            return Response(
-                {"message": "Missing required fields: email, username, or course_id"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Permission check
-        if not (request.user.is_staff or request.user.is_superuser):
-            logger.warning(
-                "User %s attempted to delete enrollment without permission",
-                request.user.username
-            )
-            return Response(
-                {"message": "Insufficient permissions"},
-                status=status.HTTP_403_FORBIDDEN
-            )
-
-        try:
-            # Get the user object
-            try:
-                user = User.objects.get(email=email, username=username)
-            except User.DoesNotExist:
-                logger.warning("User not found with email=%s, username=%s", email, username)
-                return Response(
-                    {"message": "User not found"},
-                    status=status.HTTP_404_NOT_FOUND
-                )
-
-            # Get and delete the specific enrollment
-            try:
-                enrollment = CourseEnrollment.objects.get(
-                    user=user,
-                    course_id=course_id
-                )
-
-                # Log before deletion
-                logger.info(
-                    "Deleting enrollment - User: %s (%s), Course: %s",
-                    user.username,
-                    user.email,
-                    course_id
-                )
-
-                # Perform the deletion
-                enrollment.delete()
-
-                logger.info(
-                    "Successfully deleted enrollment - User: %s, Course: %s",
-                    user.username,
-                    course_id
-                )
-
-                return Response({
-                    "message": "User enrollment deleted successfully",
-                    "user_id": user.id,
-                    "course_id": course_id
-                }, status=status.HTTP_200_OK)
-
-            except CourseEnrollment.DoesNotExist:
-                logger.warning(
-                    "Enrollment not found for user %s in course %s",
-                    user.username,
-                    course_id
-                )
-                return Response(
-                    {"message": "User is not enrolled in this course"},
-                    status=status.HTTP_404_NOT_FOUND
-                )
-
-        except Exception as err:
-            logger.error(
-                "Error deleting enrollment for user %s in course %s: %s",
-                username,
-                course_id,
-                str(err),
-                exc_info=True
-            )
-            return Response(
-                {"message": "An error occurred while processing your request"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-
-class CourseCreatorAPIView(APIView):
+class CourseCreatorAPIView(CubiteAPIView):
     authentication_classes = (
         JwtAuthentication,
         BearerAuthenticationAllowInactiveUser,
@@ -1078,7 +855,7 @@ class CourseCreatorAPIView(APIView):
             )
 
 
-class LogoutAPIView(APIView):
+class LogoutAPIView(CubiteAPIView):
     """
     API version of LogoutView
     Logs out user and returns JSON with redirect info and logout URIs.
@@ -1176,7 +953,7 @@ class LogoutAPIView(APIView):
         return response
 
 
-class GetPublicCourseOutline(APIView):
+class GetPublicCourseOutline(CubiteAPIView):
     """
     API view to get course outline without requiring authentication.
     Only returns course blocks without user-specific information.
@@ -1214,12 +991,8 @@ class GetPublicCourseOutline(APIView):
                 'course_blocks': course_blocks
             })
 
-        except Exception as e:
-            logger.error(f"Error getting course outline: {str(e)}", exc_info=True)
-            return Response(
-                {"message": "Error retrieving course outline"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+        except Exception as exc:
+            return operation_failed("public_course_outline", exc, "Error retrieving course outline", field="message")
 
     def _process_course_outline(self, course_outline):
         """
@@ -1264,7 +1037,7 @@ class GetPublicCourseOutline(APIView):
         }
 
 
-class ProgressCourseView(APIView):
+class ProgressCourseView(CubiteAPIView):
     authentication_classes = (
         JwtAuthentication,
         BearerAuthenticationAllowInactiveUser,
